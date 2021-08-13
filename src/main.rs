@@ -1,5 +1,7 @@
 use ahash::{AHashMap, AHashSet};
 
+use std::time::SystemTime;
+
 type Dimensions = (u8, u8);
 #[derive(Debug, Clone, Copy)]
 enum Move {
@@ -293,6 +295,7 @@ fn search(dims: Dimensions) {
     let mut deepest = None;
     let frequency = 1_000_000;
     let mut comps_search = 0;
+    let start = SystemTime::now();
     for sum in 0..dims.0 * dims.1 {
         for row_counts in &row_counts_lists[sum as usize + 1] {
             for col_counts in &col_counts_lists[sum as usize] {
@@ -324,8 +327,9 @@ fn search(dims: Dimensions) {
                         if dist > max_depth {
                             if incremental_printing {
                                 println!(
-                                    "{} {} {:?} {:?} {} {}",
-                                    dist, sum, row_counts, col_counts, start_row, comps_search
+                                    "{} {} {:?} {:?} {} {} {}",
+                                    dist, sum, row_counts, col_counts, start_row, comps_search,
+                                    start.elapsed().expect("Positive").as_secs()
                                 );
                                 farthest.print(dims);
                                 println!();
@@ -335,18 +339,19 @@ fn search(dims: Dimensions) {
                         }
                     }
                     for board in map.keys() {
-                        boards_set.remove(&board);
+                        boards_set.remove(board);
                     }
                     comps_search += 1;
                     if incremental_printing && comps_search % frequency == 0 {
                         println!(
-                            "{} {} {:?} {:?} {} {}",
+                            "{} {} {:?} {:?} {} {} {}",
                             comps_search,
                             sum,
                             row_counts,
                             col_counts,
                             map.len(),
-                            boards_set.len()
+                            boards_set.len(),
+                            start.elapsed().expect("Positive").as_secs()
                         );
                     }
                 }

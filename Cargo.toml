@@ -7,7 +7,6 @@ edition = "2018"
 
 [dependencies]
 ahash = "^0.7"
-smallvec = "^1.6"
 
 [profile.release]
 debug = 1
