@@ -1,5 +1,4 @@
 use ahash::{AHashMap, AHashSet};
-use smallvec::{smallvec, SmallVec};
 
 type Dimensions = (u8, u8);
 #[derive(Debug, Clone, Copy)]
@@ -18,6 +17,12 @@ impl Move {
         }
     }
 }
+const MOVE_ARRAY: [Move; 4] = [
+    Move::Up,
+    Move::Down,
+    Move::Left,
+    Move::Right,
+];
 
 fn bits_to_vec(num: u64, len: u8) -> Vec<bool> {
     assert!(len <= 64);
@@ -158,44 +163,30 @@ impl Board {
     }
 }
 
-fn component(
-    board: &Board,
-    dims: Dimensions,
-) -> (Vec<Board>, AHashMap<Board, SmallVec<[usize; 4]>>) {
-    let mut in_boards = vec![0];
-    let mut seen: AHashMap<Board, (usize, SmallVec<[usize; 4]>)> = AHashMap::new();
-    seen.insert(board.clone(), (0, smallvec![]));
-    let mut boards_backing: Vec<Board> = vec![board.clone()];
+fn component(board: &Board, dims: Dimensions) -> AHashMap<Board, [bool; 4]> {
+    let mut in_boards = vec![board.clone()];
+    let mut seen: AHashMap<Board, [bool; 4]> = AHashMap::new();
+    seen.insert(board.clone(), [false; 4]);
     loop {
         let mut out_boards = vec![];
-        for board_index in in_boards {
-            for movement in [Move::Up, Move::Down, Move::Left, Move::Right] {
-                let board = &boards_backing[board_index];
+        for board in in_boards {
+            for (i, &movement) in MOVE_ARRAY.iter().enumerate() {
                 let mut new_board = board.clone();
-                new_board.make_move(movement, dims);
-                let new_index = match seen.entry(new_board) {
-                    entry @ std::collections::hash_map::Entry::Vacant(_) => {
-                        let new_index = boards_backing.len();
-                        out_boards.push(new_index);
-                        entry.or_insert_with_key(|new_board| {
-                            boards_backing.push(new_board.clone());
-                            (new_index, smallvec![board_index])
-                        });
-                        new_index
-                    }
-                    std::collections::hash_map::Entry::Occupied(mut occupied) => {
-                        occupied.get_mut().1.push(board_index);
-                        seen[board].0
-                    }
-                };
-                let board = &boards_backing[board_index];
-                let board_neighbors = &mut seen.get_mut(board).expect("Present").1;
-                board_neighbors.push(new_index);
+                let movable = new_board.make_move(movement, dims);
+                if movable {
+                    let entry = seen.entry(new_board).or_insert_with_key(|board| {
+                        out_boards.push(board.clone());
+                        [false; 4]
+                    });
+                    let reverse_i = i ^ 1;
+                    entry[reverse_i as usize] = true;
+                    let board_neighbors = &mut seen.get_mut(&board).expect("Present");
+                    board_neighbors[i as usize] = true;
+                }
             }
         }
         if out_boards.is_empty() {
-            let map = seen.into_iter().map(|(b, (_i, n))| (b, n)).collect();
-            return (boards_backing, map);
+            return seen;
         } else {
             in_boards = out_boards;
         }
@@ -203,33 +194,36 @@ fn component(
 }
 
 fn dijkstra(
-    backing: &[Board],
-    map: &AHashMap<Board, SmallVec<[usize; 4]>>,
+    map: &AHashMap<Board, [bool; 4]>,
     start_row: u8,
     dims: Dimensions,
 ) -> Option<(usize, Board)> {
-    let mut cur_dist: Vec<&Board> = backing
-        .iter()
+    let mut cur_dist: Vec<Board> = map
+        .keys()
         .filter(|board| {
             let index = start_row * dims.1;
             let bit = board.dirs[index as usize];
             !(bit || start_row == board.r && 0 == board.c)
         })
+        .cloned()
         .collect();
-    let mut seen: AHashSet<&Board> = cur_dist.iter().copied().collect();
+    let mut seen: AHashSet<Board> = cur_dist.iter().cloned().collect();
     let mut steps = 0;
     loop {
         let mut next_dist = vec![];
         for board in &cur_dist {
-            for &neighbor_index in &map[board] {
-                let neighbor = &backing[neighbor_index];
-                if seen.insert(neighbor) {
+            for (i, &b) in map[board].iter().enumerate() {
+                if b {
+                let mut neighbor = board.clone();
+                neighbor.make_move(MOVE_ARRAY[i], dims);
+                if seen.insert(neighbor.clone()) {
                     next_dist.push(neighbor);
+                }
                 }
             }
         }
         if next_dist.is_empty() {
-            return cur_dist.first().map(|&board| (steps, board.clone()));
+            return cur_dist.first().map(|board| (steps, board.clone()));
         }
         cur_dist = next_dist;
         steps += 1;
@@ -323,11 +317,11 @@ fn search(dims: Dimensions) {
                 let mut boards_set: AHashSet<Board> = boards.into_iter().collect();
                 while !boards_set.is_empty() {
                     let board = boards_set.iter().next().expect("Nonempty");
-                    let (backing, map) = component(board, dims);
+                    let map = component(board, dims);
                     // By symmetry, can ignore lower half of start rows
                     // Further speedup: If middle, symmetry.
                     for start_row in 0..(dims.0 + 1) / 2 {
-                        let pair = dijkstra(&backing, &map, start_row, dims);
+                        let pair = dijkstra(&map, start_row, dims);
                         if pair.is_none() {
                             continue;
                         }
@@ -345,7 +339,7 @@ fn search(dims: Dimensions) {
                             deepest = Some((board.clone(), farthest));
                         }
                     }
-                    for board in backing {
+                    for board in map.keys() {
                         boards_set.remove(&board);
                     }
                     comps_search += 1;
@@ -390,7 +384,7 @@ fn search_one() {
         r: 1,
         c: 1,
     };
-    let (backing, map) = component(&board, dimensions);
+    let map = component(&board, dimensions);
     println!("Seen {}", map.len());
     let target_board = Board {
         dirs: bits_to_vec(0b0011101011011000, 16),
@@ -398,7 +392,7 @@ fn search_one() {
         c: 2,
     };
     assert!(map.contains_key(&target_board));
-    let (dist, farthest) = dijkstra(&backing, &map, 1, dimensions).expect("Possible");
+    let (dist, farthest) = dijkstra(&map, 1, dimensions).expect("Possible");
     println!("{}", dist);
     board.print(dimensions);
     println!();
