@@ -1,5 +1,5 @@
-use bitvec::prelude::*;
 use ahash::{AHashMap, AHashSet};
+use smallvec::{smallvec, SmallVec};
 
 type Dimensions = (u8, u8);
 #[derive(Debug, Clone, Copy)]
@@ -19,11 +19,14 @@ impl Move {
     }
 }
 
-const BOARD_WORDS: usize = 1;
-const BOARD_ELEMS: usize = BOARD_WORDS * 64;
+fn bits_to_vec(num: u64, len: u8) -> Vec<bool> {
+    assert!(len <= 64);
+    (0..len).map(|i| num & (1 << i) != 0).collect()
+}
+
 #[derive(Clone, Eq, PartialEq, Hash)]
 struct Board {
-    dirs: BitArray<Lsb0, [usize; BOARD_WORDS]>,
+    dirs: Vec<bool>,
     r: u8,
     c: u8,
 }
@@ -85,9 +88,9 @@ impl Board {
         let new_index = new_r * dims.1 + new_c;
         let new_bit = self.dirs[new_index as usize];
         if new_bit == movement.vertical() {
-            self.dirs.set(new_index as usize, false);
+            self.dirs[new_index as usize] = false;
             let old_index = self.r * dims.1 + self.c;
-            self.dirs.set(old_index as usize, new_bit);
+            self.dirs[old_index as usize] = new_bit;
             self.r = new_r;
             self.c = new_c;
             true
@@ -133,7 +136,7 @@ impl Board {
             && (cur_r != self.r || cur_c > self.c )
         {
             let mut new_board = self.clone();
-            new_board.dirs.set((cur_r * dims.1 + cur_c) as usize, true);
+            new_board.dirs[(cur_r * dims.1 + cur_c) as usize] = true;
             let mut new_row_counts = row_counts.to_owned();
             new_row_counts[cur_r as usize] -= 1;
             let mut new_col_counts = col_counts.to_owned();
@@ -155,42 +158,62 @@ impl Board {
     }
 }
 
-// fills seen
-fn component(board: &Board, dims: Dimensions, seen: &mut AHashMap<Board, Vec<Board>>) {
-    let mut in_boards = vec![board.clone()];
-    seen.insert(board.clone(), vec![]);
+fn component(
+    board: &Board,
+    dims: Dimensions,
+) -> (Vec<Board>, AHashMap<Board, SmallVec<[usize; 4]>>) {
+    let mut in_boards = vec![0];
+    let mut seen: AHashMap<Board, (usize, SmallVec<[usize; 4]>)> = AHashMap::new();
+    seen.insert(board.clone(), (0, smallvec![]));
+    let mut boards_backing: Vec<Board> = vec![board.clone()];
     loop {
         let mut out_boards = vec![];
-        for board in &in_boards {
+        for board_index in in_boards {
             for movement in [Move::Up, Move::Down, Move::Left, Move::Right] {
+                let board = &boards_backing[board_index];
                 let mut new_board = board.clone();
                 new_board.make_move(movement, dims);
-                let board_neighbors = seen.get_mut(board).expect("Present");
-                board_neighbors.push(new_board.clone());
-                if !seen.contains_key(&new_board) {
-                    out_boards.push(new_board.clone());
-                    seen.insert(new_board, vec![board.clone()]);
-                } else {
-                    let new_neighbors = seen.get_mut(&new_board).expect("Just checked");
-                    new_neighbors.push(board.clone());
-                }
+                let new_index = match seen.entry(new_board) {
+                    entry @ std::collections::hash_map::Entry::Vacant(_) => {
+                        let new_index = boards_backing.len();
+                        out_boards.push(new_index);
+                        entry.or_insert_with_key(|new_board| {
+                            boards_backing.push(new_board.clone());
+                            (new_index, smallvec![board_index])
+                        });
+                        new_index
+                    }
+                    std::collections::hash_map::Entry::Occupied(mut occupied) => {
+                        occupied.get_mut().1.push(board_index);
+                        seen[board].0
+                    }
+                };
+                let board = &boards_backing[board_index];
+                let board_neighbors = &mut seen.get_mut(board).expect("Present").1;
+                board_neighbors.push(new_index);
             }
         }
         if out_boards.is_empty() {
-            return;
+            let map = seen.into_iter().map(|(b, (_i, n))| (b, n)).collect();
+            return (boards_backing, map);
         } else {
             in_boards = out_boards;
         }
     }
 }
 
-fn dijkstra(comp: &AHashMap<Board, Vec<Board>>, start_row: u8, dims: Dimensions) -> (usize, Board) {
-    let mut cur_dist: Vec<&Board> = comp
-        .keys()
+fn dijkstra(
+    backing: &[Board],
+    map: &AHashMap<Board, SmallVec<[usize; 4]>>,
+    start_row: u8,
+    dims: Dimensions,
+) -> Option<(usize, Board)> {
+    let mut cur_dist: Vec<&Board> = backing
+        .iter()
         .filter(|board| {
             let index = start_row * dims.1;
             let bit = board.dirs[index as usize];
-            !bit && !(start_row == board.r && 0 == board.c)
+            !(bit || start_row == board.r && 0 == board.c)
         })
         .collect();
     let mut seen: AHashSet<&Board> = cur_dist.iter().copied().collect();
@@ -198,15 +221,15 @@ fn dijkstra(comp: &AHashMap<Board, Vec<Board>>, start_row: u8, dims: Dimensions)
     loop {
         let mut next_dist = vec![];
         for board in &cur_dist {
-            for neighbor in &comp[board] {
-                if !seen.contains(&neighbor) {
-                    seen.insert(neighbor);
+            for &neighbor_index in &map[board] {
+                let neighbor = &backing[neighbor_index];
+                if seen.insert(neighbor) {
                     next_dist.push(neighbor);
                 }
             }
         }
         if next_dist.is_empty() {
-            return (steps, cur_dist[0].clone());
+            return cur_dist.first().map(|&board| (steps, board.clone()));
         }
         cur_dist = next_dist;
         steps += 1;
@@ -214,28 +237,39 @@ fn dijkstra(comp: &AHashMap<Board, Vec<Board>>, start_row: u8, dims: Dimensions)
 }
 
 // All boards with this many verts in the rows and cols.
-// Cursor counts as horiz for row and vert for col, so we subtract one from col.
+// Cursor counts as vert for row and horiz for col, so we subtract 1 from row.
 // Must also be in starting position, c == 1.
-fn generate(row_counts: &[u8], col_counts: &[u8], start_row: u8, dims: Dimensions) -> Vec<Board> {
+fn generate(row_counts: &Vec<u8>, col_counts: &[u8], dims: Dimensions) -> Vec<Board> {
     let debug = false;
-    if debug {
-        println!("{:?} {:?} {}", row_counts, col_counts, start_row);
-    }
-    if col_counts[1] == 0 {
-        return vec![];
-    }
-    let mut fixed_col_counts = col_counts.to_owned();
-    fixed_col_counts[1] -= 1;
-    let row_sum: u8 = row_counts.iter().sum();
-    let col_sum: u8 = fixed_col_counts.iter().sum();
-    assert_eq!(row_sum, col_sum);
+    let mut all_outs = vec![];
+    for start_row in 0..(dims.0 + 1) / 2 {
+        if debug {
+            println!("{:?} {:?} {}", row_counts, col_counts, start_row);
+        }
+        if row_counts[start_row as usize] == 0 {
+            continue;
+        }
+        let mut fixed_row_counts = row_counts.to_owned();
+        fixed_row_counts[start_row as usize] -= 1;
+        let row_sum: u8 = fixed_row_counts.iter().sum();
+        let col_sum: u8 = col_counts.iter().sum();
+        assert_eq!(row_sum, col_sum);
+        if start_row * 2 + 1 == dims.0 {
+            let rev_rows: Vec<u8> = row_counts.iter().cloned().rev().collect();
+            if &rev_rows > row_counts {
+                continue;
+            }
+        }
 
-    let board = Board {
-        dirs: BitArray::zeroed(),
-        r: start_row,
-        c: 1,
-    };
-    board.generate(row_counts, &fixed_col_counts, 0, 0, dims)
+        let board = Board {
+            dirs: vec![false; (dims.0 * dims.1) as usize],
+            r: start_row,
+            c: 1,
+        };
+        let results = board.generate(&fixed_row_counts, col_counts, 0, 0, dims);
+        all_outs.extend(results);
+    }
+    all_outs
 }
 
 fn product(bound: u8, reps: u8) -> Vec<Vec<u8>> {
@@ -256,7 +290,6 @@ fn product(bound: u8, reps: u8) -> Vec<Vec<u8>> {
 
 fn search(dims: Dimensions) {
     let incremental_printing = true;
-    assert!((dims.0 * dims.1) as usize <= BOARD_ELEMS);
     let mut row_counts_lists = vec![vec![]; (dims.0 * dims.1) as usize + 1];
     for row_counts in product(dims.1, dims.0) {
         let count: u8 = row_counts.iter().sum();
@@ -269,23 +302,41 @@ fn search(dims: Dimensions) {
     }
     let mut max_depth = 0;
     let mut deepest = None;
-    let mut comp = AHashMap::new();
+    let frequency = 1_000_000;
+    let mut comps_search = 0;
     for sum in 0..dims.0 * dims.1 {
-        for row_counts in &row_counts_lists[sum as usize] {
-            for col_counts in &col_counts_lists[sum as usize + 1] {
-                // By symmetry, can ignore lower half of start rows
-                for start_row in 0..dims.0 / 2 {
-                    let boards = generate(row_counts, col_counts, start_row, dims);
-                    let mut boards_set: AHashSet<Board> = boards.into_iter().collect();
-                    while !boards_set.is_empty() {
-                        let board = boards_set.iter().next().expect("Nonempty");
-                        component(board, dims, &mut comp);
-                        let (dist, farthest) = dijkstra(&comp, start_row, dims);
+        for row_counts in &row_counts_lists[sum as usize + 1] {
+            for col_counts in &col_counts_lists[sum as usize] {
+                // 0: inaccessible, Max: decisionless
+                if row_counts.iter().any(|r| *r == 0 || *r == dims.1) {
+                    continue;
+                }
+                // 0: decisionless, Max: inaccessible
+                if col_counts
+                    .iter()
+                    .enumerate()
+                    .any(|(i, c)| *c == 0 || *c == dims.0 && i != 1)
+                {
+                    continue;
+                }
+                let boards = generate(row_counts, col_counts, dims);
+                let mut boards_set: AHashSet<Board> = boards.into_iter().collect();
+                while !boards_set.is_empty() {
+                    let board = boards_set.iter().next().expect("Nonempty");
+                    let (backing, map) = component(board, dims);
+                    // By symmetry, can ignore lower half of start rows
+                    // Further speedup: If middle, symmetry.
+                    for start_row in 0..(dims.0 + 1) / 2 {
+                        let pair = dijkstra(&backing, &map, start_row, dims);
+                        if pair.is_none() {
+                            continue;
+                        }
+                        let (dist, farthest) = pair.expect("Checked");
                         if dist > max_depth {
                             if incremental_printing {
                                 println!(
-                                    "{} {:?} {:?} {}",
-                                    dist, row_counts, col_counts, start_row
+                                    "{} {} {:?} {:?} {} {}",
+                                    dist, sum, row_counts, col_counts, start_row, comps_search
                                 );
                                 farthest.print(dims);
                                 println!();
@@ -293,15 +344,21 @@ fn search(dims: Dimensions) {
                             max_depth = dist;
                             deepest = Some((board.clone(), farthest));
                         }
-                        for board in comp.keys() {
-                            if board.r == start_row
-                                && board.c == 1
-                                && !board.dirs[(start_row * dims.1) as usize]
-                            {
-                                boards_set.remove(board);
-                            }
-                        }
-                        comp.clear();
+                    }
+                    for board in backing {
+                        boards_set.remove(&board);
+                    }
+                    comps_search += 1;
+                    if incremental_printing && comps_search % frequency == 0 {
+                        println!(
+                            "{} {} {:?} {:?} {} {}",
+                            comps_search,
+                            sum,
+                            row_counts,
+                            col_counts,
+                            map.len(),
+                            boards_set.len()
+                        );
                     }
                 }
             }
@@ -328,22 +385,20 @@ fn search_all() {
 
 fn search_one() {
     let dimensions = (4, 4);
-    assert!((dimensions.0 * dimensions.1) as usize <= BOARD_ELEMS);
     let board = Board {
-        dirs: BitArray::new([0b1010101111000001]),
+        dirs: bits_to_vec(0b1010101111000001, 16),
         r: 1,
         c: 1,
     };
-    let mut comp = AHashMap::new();
-    component(&board, dimensions, &mut comp);
-    println!("Seen {}", comp.len());
+    let (backing, map) = component(&board, dimensions);
+    println!("Seen {}", map.len());
     let target_board = Board {
-        dirs: BitArray::new([0b0011101011011000]),
+        dirs: bits_to_vec(0b0011101011011000, 16),
         r: 2,
         c: 2,
     };
-    assert!(comp.contains_key(&target_board));
-    let (dist, farthest) = dijkstra(&comp, 1, dimensions);
+    assert!(map.contains_key(&target_board));
+    let (dist, farthest) = dijkstra(&backing, &map, 1, dimensions).expect("Possible");
     println!("{}", dist);
     board.print(dimensions);
     println!();
@@ -352,7 +407,7 @@ fn search_one() {
 
 fn explore() {
     let mut board = Board {
-        dirs: BitArray::new([0b0110100110010100]),
+        dirs: bits_to_vec(0b0110100110010100, 16),
         r: 0,
         c: 1,
     };
@@ -373,6 +428,36 @@ fn explore() {
     }
 }
 
+fn play() {
+    let dims = (4, 4);
+    let mut board = Board {
+        dirs: bits_to_vec(0b0011101011011000, 16),
+        r: 2,
+        c: 2,
+    };
+    let target_row = 1;
+    let mut steps = 0;
+    println!("wasd keys");
+    while board.dirs[(target_row * dims.1) as usize] || board.r == target_row && board.c == 0 {
+        println!("Steps {}, Goal row {}", steps, target_row);
+        board.print(dims);
+        let mut string = String::new();
+        std::io::stdin().read_line(&mut string).expect("Input");
+        let movement = match string.chars().next() {
+            Some('w') => Move::Up,
+            Some('a') => Move::Left,
+            Some('s') => Move::Down,
+            Some('d') => Move::Right,
+            _ => continue,
+        };
+        let was_successful = board.make_move(movement, dims);
+        if was_successful {
+            steps += 1;
+        }
+    }
+    println!("Completed in {} steps!", steps);
+}
+
 fn main() {
     let choice = std::env::args()
         .nth(1)
@@ -380,8 +465,9 @@ fn main() {
     match choice {
         0 => explore(),
         1 => search_one(),
-        2 => search((4, 4)),
+        2 => search((5, 4)),
         3 => search_all(),
+        4 => play(),
         _ => unimplemented!(),
     }
 }
