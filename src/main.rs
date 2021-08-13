@@ -17,12 +17,7 @@ impl Move {
         }
     }
 }
-const MOVE_ARRAY: [Move; 4] = [
-    Move::Up,
-    Move::Down,
-    Move::Left,
-    Move::Right,
-];
+const MOVE_ARRAY: [Move; 4] = [Move::Up, Move::Down, Move::Left, Move::Right];
 
 fn bits_to_vec(num: u64, len: u8) -> Vec<bool> {
     assert!(len <= 64);
@@ -198,32 +193,32 @@ fn dijkstra(
     start_row: u8,
     dims: Dimensions,
 ) -> Option<(usize, Board)> {
-    let mut cur_dist: Vec<Board> = map
+    let mut cur_dist: Vec<&Board> = map
         .keys()
         .filter(|board| {
             let index = start_row * dims.1;
             let bit = board.dirs[index as usize];
             !(bit || start_row == board.r && 0 == board.c)
         })
-        .cloned()
         .collect();
-    let mut seen: AHashSet<Board> = cur_dist.iter().cloned().collect();
+    let mut seen: AHashSet<&Board> = cur_dist.iter().copied().collect();
     let mut steps = 0;
     loop {
         let mut next_dist = vec![];
-        for board in &cur_dist {
+        for &board in &cur_dist {
             for (i, &b) in map[board].iter().enumerate() {
                 if b {
-                let mut neighbor = board.clone();
-                neighbor.make_move(MOVE_ARRAY[i], dims);
-                if seen.insert(neighbor.clone()) {
-                    next_dist.push(neighbor);
-                }
+                    let mut neighbor = board.clone();
+                    neighbor.make_move(MOVE_ARRAY[i], dims);
+                    let neighbor_ref = map.get_key_value(&neighbor).expect("present").0;
+                    if seen.insert(neighbor_ref) {
+                        next_dist.push(neighbor_ref);
+                    }
                 }
             }
         }
         if next_dist.is_empty() {
-            return cur_dist.first().map(|board| (steps, board.clone()));
+            return cur_dist.first().map(|&board| (steps, board.clone()));
         }
         cur_dist = next_dist;
         steps += 1;
