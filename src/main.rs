@@ -1,5 +1,6 @@
 use ahash::{AHashMap, AHashSet};
 
+use std::cell::Cell;
 use std::time::SystemTime;
 
 type Dimensions = (u8, u8);
@@ -26,7 +27,7 @@ fn bits_to_vec(num: u64, len: u8) -> Vec<bool> {
     (0..len).map(|i| num & (1 << i) != 0).collect()
 }
 
-#[derive(Clone, Eq, PartialEq, Hash)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, PartialOrd, Ord)]
 struct Board {
     dirs: Vec<bool>,
     r: u8,
@@ -90,9 +91,8 @@ impl Board {
         let new_index = new_r * dims.1 + new_c;
         let new_bit = self.dirs[new_index as usize];
         if new_bit == movement.vertical() {
-            self.dirs[new_index as usize] = false;
             let old_index = self.r * dims.1 + self.c;
-            self.dirs[old_index as usize] = new_bit;
+            self.dirs.swap(new_index as usize, old_index as usize);
             self.r = new_r;
             self.c = new_c;
             true
@@ -160,10 +160,10 @@ impl Board {
     }
 }
 
-fn component(board: &Board, dims: Dimensions) -> AHashMap<Board, [bool; 4]> {
+fn component(board: &Board, dims: Dimensions) -> AHashMap<Board, ([bool; 4], Cell<bool>)> {
     let mut in_boards = vec![board.clone()];
-    let mut seen: AHashMap<Board, [bool; 4]> = AHashMap::new();
-    seen.insert(board.clone(), [false; 4]);
+    let mut seen: AHashMap<Board, ([bool; 4], Cell<bool>)> = AHashMap::new();
+    seen.insert(board.clone(), ([false; 4], Cell::new(false)));
     loop {
         let mut out_boards = vec![];
         for board in in_boards {
@@ -173,12 +173,12 @@ fn component(board: &Board, dims: Dimensions) -> AHashMap<Board, [bool; 4]> {
                 if movable {
                     let entry = seen.entry(new_board).or_insert_with_key(|board| {
                         out_boards.push(board.clone());
-                        [false; 4]
+                        ([false; 4], Cell::new(false))
                     });
                     let reverse_i = i ^ 1;
-                    entry[reverse_i as usize] = true;
+                    entry.0[reverse_i as usize] = true;
                     let board_neighbors = &mut seen.get_mut(&board).expect("Present");
-                    board_neighbors[i as usize] = true;
+                    board_neighbors.0[i as usize] = true;
                 }
             }
         }
@@ -191,36 +191,40 @@ fn component(board: &Board, dims: Dimensions) -> AHashMap<Board, [bool; 4]> {
 }
 
 fn dijkstra(
-    map: &AHashMap<Board, [bool; 4]>,
+    map: &AHashMap<Board, ([bool; 4], Cell<bool>)>,
     start_row: u8,
     dims: Dimensions,
 ) -> Option<(usize, Board)> {
-    let mut cur_dist: Vec<&Board> = map
-        .keys()
-        .filter(|board| {
+    let mut cur_dist: Vec<(&Board, &[bool; 4])> = map
+        .iter()
+        .filter(|(board, _)| {
             let index = start_row * dims.1;
             let bit = board.dirs[index as usize];
             !(bit || start_row == board.r && 0 == board.c)
         })
+        .map(|(board, (array, _))| (board, array))
         .collect();
-    let mut seen: AHashSet<&Board> = cur_dist.iter().copied().collect();
+    // Clear seen info
+    map.values().for_each(|(_, seen)| seen.set(false));
     let mut steps = 0;
     loop {
         let mut next_dist = vec![];
-        for &board in &cur_dist {
-            for (i, &b) in map[board].iter().enumerate() {
+        for &(board, array) in &cur_dist {
+            for (i, &b) in array.iter().enumerate() {
                 if b {
                     let mut neighbor = board.clone();
                     neighbor.make_move(MOVE_ARRAY[i], dims);
-                    let neighbor_ref = map.get_key_value(&neighbor).expect("present").0;
-                    if seen.insert(neighbor_ref) {
-                        next_dist.push(neighbor_ref);
+                    let (neighbor_ref, (neighbor_array, seen)) =
+                        map.get_key_value(&neighbor).expect("present");
+                    let previously_seen = seen.replace(true);
+                    if !previously_seen {
+                        next_dist.push((neighbor_ref, neighbor_array));
                     }
                 }
             }
         }
         if next_dist.is_empty() {
-            return cur_dist.first().map(|&board| (steps, board.clone()));
+            return cur_dist.first().map(|&(board, _)| (steps, board.clone()));
         }
         cur_dist = next_dist;
         steps += 1;
@@ -280,7 +284,6 @@ fn product(bound: u8, reps: u8) -> Vec<Vec<u8>> {
 }
 
 fn search(dims: Dimensions) {
-    let incremental_printing = true;
     let mut row_counts_lists = vec![vec![]; (dims.0 * dims.1) as usize + 1];
     for row_counts in product(dims.1, dims.0) {
         let count: u8 = row_counts.iter().sum();
@@ -293,6 +296,7 @@ fn search(dims: Dimensions) {
     }
     let mut max_depth = 0;
     let mut deepest = None;
+    let incremental_printing = true;
     let frequency = 1_000_000;
     let mut comps_search = 0;
     let start = SystemTime::now();
@@ -328,14 +332,19 @@ fn search(dims: Dimensions) {
                             if incremental_printing {
                                 println!(
                                     "{} {} {:?} {:?} {} {} {}",
-                                    dist, sum, row_counts, col_counts, start_row, comps_search,
+                                    dist,
+                                    sum,
+                                    row_counts,
+                                    col_counts,
+                                    start_row,
+                                    comps_search,
                                     start.elapsed().expect("Positive").as_secs()
                                 );
                                 farthest.print(dims);
                                 println!();
                             }
                             max_depth = dist;
-                            deepest = Some((board.clone(), farthest));
+                            deepest = Some((start_row, farthest));
                         }
                     }
                     for board in map.keys() {
@@ -358,9 +367,8 @@ fn search(dims: Dimensions) {
             }
         }
     }
-    let (board, farthest) = deepest.expect("Found one");
-    board.print(dims);
-    println!("Farthest in {}", max_depth);
+    let (start_row, farthest) = deepest.expect("Found one");
+    println!("Farthest in {}: Row {}", max_depth, start_row);
     farthest.print(dims);
 }
 
@@ -422,14 +430,28 @@ fn explore() {
     }
 }
 
-fn play() {
-    let dims = (4, 4);
-    let mut board = Board {
-        dirs: bits_to_vec(0b0011101011011000, 16),
-        r: 2,
-        c: 2,
+fn play(option: usize) {
+    let (mut board, dims, target_row) = match option {
+        0 => (
+            Board {
+                dirs: bits_to_vec(0b0011101011011000, 16),
+                r: 2,
+                c: 2,
+            },
+            (4, 4),
+            1,
+        ),
+        1 => (
+            Board {
+                dirs: bits_to_vec(0b00011001101101111110, 20),
+                r: 3,
+                c: 2,
+            },
+            (5, 4),
+            1,
+        ),
+        _ => unimplemented!()
     };
-    let target_row = 1;
     let mut steps = 0;
     println!("wasd keys");
     while board.dirs[(target_row * dims.1) as usize] || board.r == target_row && board.c == 0 {
@@ -461,7 +483,7 @@ fn main() {
         1 => search_one(),
         2 => search((5, 4)),
         3 => search_all(),
-        4 => play(),
+        4 => play(1),
         _ => unimplemented!(),
     }
 }
