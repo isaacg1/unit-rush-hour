@@ -145,60 +145,14 @@ impl Board {
         if cur_r >= dims.0 {
             return vec![];
         }
-        if self.dirs.is_set(cur) {
-            return self.generate(row_counts, col_counts, cur + 1, total, dims);
+        if dims.0 * dims.1 - cur < total {
+            return vec![];
         }
-        if row_counts[cur_r as usize] == dims.1 - cur_c {
-            if total == dims.1 - cur_c {
-                for i in cur_c..dims.1 {
-                    self.dirs.set(i + cur_r * dims.1);
-                }
-                return vec![self];
+        if dims.0 * dims.1 - cur == total {
+            for index in cur..dims.0 * dims.1 {
+                self.dirs.set(index);
             }
-            if cur_c <= self.c && cur_r == self.r {
-                return vec![];
-            }
-            let mut new_row_counts = row_counts.to_owned();
-            let mut new_col_counts = col_counts.to_owned();
-            for i in cur_c..dims.1 {
-                if new_col_counts[i as usize] > 0 {
-                    new_col_counts[i as usize] -= 1;
-                    self.dirs.set(i + cur_r * dims.1);
-                } else {
-                    return vec![];
-                }
-            }
-            new_row_counts[cur_r as usize] = 0;
-            return self.generate(
-                &new_row_counts,
-                &new_col_counts,
-                cur + (dims.1 - cur_c),
-                total - (dims.1 - cur_c),
-                dims,
-            );
-        }
-        if col_counts[cur_c as usize] == dims.0 - cur_r {
-            if cur_c <= self.c && cur_r <= self.r {
-                return vec![];
-            }
-            let mut new_row_counts = row_counts.to_owned();
-            let mut new_col_counts = col_counts.to_owned();
-            for i in cur_r..dims.0 {
-                if new_row_counts[i as usize] > 0 {
-                    new_row_counts[i as usize] -= 1;
-                    self.dirs.set(cur_c + i * dims.1);
-                } else {
-                    return vec![];
-                }
-            }
-            new_col_counts[cur_c as usize] = 0;
-            return self.generate(
-                &new_row_counts,
-                &new_col_counts,
-                cur + 1,
-                total - (dims.0 - cur_r),
-                dims,
-            );
+            return vec![self];
         }
         let set_true = if row_counts[cur_r as usize] > 0
             && col_counts[cur_c as usize] > 0
@@ -327,12 +281,7 @@ fn dijkstra(
 // All boards with this many verts in the rows and cols.
 // Cursor counts as vert for row and horiz for col, so we subtract 1 from row.
 // Must also be in starting position, c == 1.
-fn generate(
-    row_counts: &[u8],
-    col_counts: &[u8],
-    start_row: u8,
-    dims: Dimensions,
-) -> Vec<Board> {
+fn generate(row_counts: &[u8], col_counts: &[u8], start_row: u8, dims: Dimensions) -> Vec<Board> {
     let debug = false;
     let mut all_outs = vec![];
     if debug {
