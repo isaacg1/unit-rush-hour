@@ -170,7 +170,7 @@ fn component(board: &Board, dims: Dimensions) -> AHashMap<Board, ([bool; 4], Cel
         for search_board in in_boards {
             for (i, &movement) in MOVE_ARRAY.iter().enumerate() {
                 if &search_board == board && i != 2 {
-                    continue
+                    continue;
                 }
                 let mut new_board = search_board.clone();
                 let movable = new_board.make_move(movement, dims);
@@ -324,26 +324,26 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                     let board = boards_set.iter().next().expect("Nonempty");
                     let map = component(board, dims);
                     let start_row = board.r;
-                        let (dist, farthest) = dijkstra(&map, start_row, dims);
-                        if dist > max_depth {
-                            if incremental_printing {
-                                println!(
-                                    "{} {} {:?} {:?} {} {} {} {}",
-                                    dist,
-                                    sum,
-                                    row_counts,
-                                    col_counts,
-                                    start_row,
-                                    map.len(),
-                                    comps_search,
-                                    start.elapsed().expect("Positive").as_secs()
-                                );
-                                farthest.print(dims);
-                                println!();
-                            }
-                            max_depth = dist;
-                            deepest = Some((start_row, farthest));
+                    let (dist, farthest) = dijkstra(&map, start_row, dims);
+                    if dist > max_depth {
+                        if incremental_printing {
+                            println!(
+                                "{} {} {:?} {:?} {} {} {} {}",
+                                dist,
+                                sum,
+                                row_counts,
+                                col_counts,
+                                start_row,
+                                map.len(),
+                                comps_search,
+                                start.elapsed().expect("Positive").as_secs()
+                            );
+                            farthest.print(dims);
+                            println!();
                         }
+                        max_depth = dist;
+                        deepest = Some((start_row, farthest));
+                    }
                     for comp_board in map.keys() {
                         if comp_board.r == start_row {
                             boards_set.remove(comp_board);
