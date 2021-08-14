@@ -256,18 +256,28 @@ impl ComponentSearcher {
     }
 }
 
-// Destructively mutates cur_dist, next_dist to avoid reallocation
-fn dijkstra<'a>(
+// Holds cur_dist, next_dist to avoid reallocation
+struct DijkstraSearcher {
+    cur_dist: Vec<(Board, [bool; 4], usize)>,
+    next_dist: Vec<(Board, [bool; 4], usize)>,
+}
+impl DijkstraSearcher {
+fn new() -> Self {
+    Self {
+        cur_dist: vec![],
+        next_dist: vec![],
+    }
+}
+fn dijkstra(
+    &mut self,
     map: &AHashMap<Board, ([bool; 4], Cell<bool>)>,
     start_row: u8,
     dims: Dimensions,
-    cur_dist: &'a mut Vec<(Board, [bool; 4], usize)>,
-    next_dist: &'a mut Vec<(Board, [bool; 4], usize)>,
 ) -> (usize, Board) {
     debug_assert!(map.values().all(|(_, seen)| !seen.get()));
-    cur_dist.clear();
-    next_dist.clear();
-    cur_dist.extend(
+    self.cur_dist.clear();
+    self.next_dist.clear();
+    self.cur_dist.extend(
         map.iter()
             .filter(|(board, _)| {
                 let index = start_row * dims.1;
@@ -277,11 +287,10 @@ fn dijkstra<'a>(
             // 256 is dummy entry
             .map(|(board, (array, _))| (*board, *array, 256)),
     );
-    debug_assert!(!cur_dist.is_empty());
+    debug_assert!(!self.cur_dist.is_empty());
     let mut steps = 0;
     loop {
-        next_dist.clear();
-        for &(board, array, come_from) in &*cur_dist {
+        for &(board, array, come_from) in &self.cur_dist {
             for (i, &b) in array.iter().enumerate() {
                 if b && i != come_from {
                     let mut neighbor = board.clone();
@@ -290,17 +299,19 @@ fn dijkstra<'a>(
                     let previously_seen = seen.replace(true);
                     if !previously_seen {
                         let reverse_i = i ^ 1;
-                        next_dist.push((neighbor, *neighbor_array, reverse_i));
+                        self.next_dist.push((neighbor, *neighbor_array, reverse_i));
                     }
                 }
             }
         }
-        if next_dist.is_empty() {
-            return (steps, cur_dist[0].0.clone());
+        if self.next_dist.is_empty() {
+            return (steps, self.cur_dist[0].0.clone());
         }
-        std::mem::swap(cur_dist, next_dist);
+        self.cur_dist.clear();
+        std::mem::swap(&mut self.cur_dist, &mut self.next_dist);
         steps += 1;
     }
+}
 }
 
 // All boards with this many verts in the rows and cols.
@@ -372,8 +383,7 @@ fn search(dims: Dimensions, incremental_printing: bool) {
     let time_frequency = 60;
     let start = SystemTime::now();
     let mut component_searcher = ComponentSearcher::new();
-    let mut cur_dist: Vec<(Board, [bool; 4], usize)> = vec![];
-    let mut next_dist: Vec<(Board, [bool; 4], usize)> = vec![];
+    let mut dijkstra_searcher = DijkstraSearcher::new();
     for sum in 0..dims.0 * dims.1 {
         for row_counts in &row_counts_lists[sum as usize + 1] {
             // 0: inaccessible, Max: decisionless
@@ -396,7 +406,7 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                         let board = *boards_set.iter().next().expect("Nonempty");
                         let map = component_searcher.component(&board, dims);
                         let (dist, farthest) =
-                            dijkstra(map, start_row, dims, &mut cur_dist, &mut next_dist);
+                            dijkstra_searcher.dijkstra(map, start_row, dims);
                         if dist > max_depth {
                             if incremental_printing {
                                 println!(
@@ -485,7 +495,8 @@ fn search_one() {
         c: 2,
     };
     assert!(map.contains_key(&target_board));
-    let (dist, farthest) = dijkstra(&map, 1, dimensions, &mut vec![], &mut vec![]);
+    let mut dijkstra_searcher = DijkstraSearcher::new();
+    let (dist, farthest) = dijkstra_searcher.dijkstra(&map, 1, dimensions);
     println!("{}", dist);
     board.print(dimensions);
     println!();
