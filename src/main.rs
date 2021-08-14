@@ -238,36 +238,39 @@ fn dijkstra(
 // All boards with this many verts in the rows and cols.
 // Cursor counts as vert for row and horiz for col, so we subtract 1 from row.
 // Must also be in starting position, c == 1.
-fn generate(row_counts: &Vec<u8>, col_counts: &[u8], dims: Dimensions) -> Vec<Board> {
+fn generate(
+    row_counts: &Vec<u8>,
+    col_counts: &[u8],
+    start_row: u8,
+    dims: Dimensions,
+) -> Vec<Board> {
     let debug = false;
     let mut all_outs = vec![];
-    for start_row in 0..(dims.0 + 1) / 2 {
-        if debug {
-            println!("{:?} {:?} {}", row_counts, col_counts, start_row);
-        }
-        if row_counts[start_row as usize] == 0 {
-            continue;
-        }
-        let mut fixed_row_counts = row_counts.to_owned();
-        fixed_row_counts[start_row as usize] -= 1;
-        let row_sum: u8 = fixed_row_counts.iter().sum();
-        let col_sum: u8 = col_counts.iter().sum();
-        assert_eq!(row_sum, col_sum);
-        if start_row * 2 + 1 == dims.0 {
-            let rev_rows: Vec<u8> = row_counts.iter().cloned().rev().collect();
-            if &rev_rows > row_counts {
-                continue;
-            }
-        }
-
-        let board = Board {
-            dirs: vec![false; (dims.0 * dims.1) as usize],
-            r: start_row,
-            c: 1,
-        };
-        let results = board.generate(&fixed_row_counts, col_counts, 0, 0, dims);
-        all_outs.extend(results);
+    if debug {
+        println!("{:?} {:?} {}", row_counts, col_counts, start_row);
     }
+    if row_counts[start_row as usize] == 0 {
+        return vec![];
+    }
+    let mut fixed_row_counts = row_counts.to_owned();
+    fixed_row_counts[start_row as usize] -= 1;
+    let row_sum: u8 = fixed_row_counts.iter().sum();
+    let col_sum: u8 = col_counts.iter().sum();
+    assert_eq!(row_sum, col_sum);
+    if start_row * 2 + 1 == dims.0 {
+        let rev_rows: Vec<u8> = row_counts.iter().cloned().rev().collect();
+        if &rev_rows > row_counts {
+            return vec![];
+        }
+    }
+
+    let board = Board {
+        dirs: vec![false; (dims.0 * dims.1) as usize],
+        r: start_row,
+        c: 1,
+    };
+    let results = board.generate(&fixed_row_counts, col_counts, 0, 0, dims);
+    all_outs.extend(results);
     all_outs
 }
 
@@ -305,11 +308,11 @@ fn search(dims: Dimensions, incremental_printing: bool) {
     let start = SystemTime::now();
     for sum in 0..dims.0 * dims.1 {
         for row_counts in &row_counts_lists[sum as usize + 1] {
+            // 0: inaccessible, Max: decisionless
+            if row_counts.iter().any(|r| *r == 0 || *r == dims.1) {
+                continue;
+            }
             for col_counts in &col_counts_lists[sum as usize] {
-                // 0: inaccessible, Max: decisionless
-                if row_counts.iter().any(|r| *r == 0 || *r == dims.1) {
-                    continue;
-                }
                 // 0: decisionless, Max: inaccessible
                 if col_counts
                     .iter()
@@ -318,49 +321,50 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                 {
                     continue;
                 }
-                let boards = generate(row_counts, col_counts, dims);
-                let mut boards_set: AHashSet<Board> = boards.into_iter().collect();
-                while !boards_set.is_empty() {
-                    let board = boards_set.iter().next().expect("Nonempty");
-                    let map = component(board, dims);
-                    let start_row = board.r;
-                    let (dist, farthest) = dijkstra(&map, start_row, dims);
-                    if dist > max_depth {
-                        if incremental_printing {
+                for start_row in 0..(dims.0 + 1) / 2 {
+                    let boards = generate(row_counts, col_counts, start_row, dims);
+                    let mut boards_set: AHashSet<Board> = boards.into_iter().collect();
+                    while !boards_set.is_empty() {
+                        let board = boards_set.iter().next().expect("Nonempty");
+                        let map = component(board, dims);
+                        let (dist, farthest) = dijkstra(&map, start_row, dims);
+                        if dist > max_depth {
+                            if incremental_printing {
+                                println!(
+                                    "{} {} {:?} {:?} {} {} {} {}",
+                                    dist,
+                                    sum,
+                                    row_counts,
+                                    col_counts,
+                                    start_row,
+                                    map.len(),
+                                    comps_search,
+                                    start.elapsed().expect("Positive").as_secs()
+                                );
+                                farthest.print(dims);
+                                println!();
+                            }
+                            max_depth = dist;
+                            deepest = Some((start_row, farthest));
+                        }
+                        for comp_board in map.keys() {
+                            if comp_board.r == start_row {
+                                boards_set.remove(comp_board);
+                            }
+                        }
+                        comps_search += 1;
+                        if incremental_printing && comps_search % frequency == 0 {
                             println!(
-                                "{} {} {:?} {:?} {} {} {} {}",
-                                dist,
+                                "{} {} {:?} {:?} {} {} {}",
+                                comps_search,
                                 sum,
                                 row_counts,
                                 col_counts,
-                                start_row,
                                 map.len(),
-                                comps_search,
+                                boards_set.len(),
                                 start.elapsed().expect("Positive").as_secs()
                             );
-                            farthest.print(dims);
-                            println!();
                         }
-                        max_depth = dist;
-                        deepest = Some((start_row, farthest));
-                    }
-                    for comp_board in map.keys() {
-                        if comp_board.r == start_row {
-                            boards_set.remove(comp_board);
-                        }
-                    }
-                    comps_search += 1;
-                    if incremental_printing && comps_search % frequency == 0 {
-                        println!(
-                            "{} {} {:?} {:?} {} {} {}",
-                            comps_search,
-                            sum,
-                            row_counts,
-                            col_counts,
-                            map.len(),
-                            boards_set.len(),
-                            start.elapsed().expect("Positive").as_secs()
-                        );
                     }
                 }
             }
