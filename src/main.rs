@@ -247,28 +247,32 @@ fn component<'a>(
     }
 }
 
-fn dijkstra(
+// Destructively mutates cur_dist, next_dist to avoid reallocation
+fn dijkstra<'a>(
     map: &AHashMap<Board, ([bool; 4], Cell<bool>)>,
     start_row: u8,
     dims: Dimensions,
+    cur_dist: &'a mut Vec<(Board, [bool; 4], usize)>,
+    next_dist: &'a mut Vec<(Board, [bool; 4], usize)>,
 ) -> (usize, Board) {
     debug_assert!(map.values().all(|(_, seen)| !seen.get()));
-    let mut cur_dist: Vec<(Board, [bool; 4], usize)> = map
-        .iter()
-        .filter(|(board, _)| {
-            let index = start_row * dims.1;
-            let bit = board.dirs.is_set(index);
-            !(bit || start_row == board.r && 0 == board.c)
-        })
-        // 256 is dummy entry
-        .map(|(board, (array, _))| (*board, *array, 256))
-        .collect();
+    cur_dist.clear();
+    next_dist.clear();
+    cur_dist.extend(
+        map.iter()
+            .filter(|(board, _)| {
+                let index = start_row * dims.1;
+                let bit = board.dirs.is_set(index);
+                !(bit || start_row == board.r && 0 == board.c)
+            })
+            // 256 is dummy entry
+            .map(|(board, (array, _))| (*board, *array, 256)),
+    );
     debug_assert!(!cur_dist.is_empty());
     let mut steps = 0;
-    let mut next_dist = vec![];
     loop {
         next_dist.clear();
-        for &(board, array, come_from) in &cur_dist {
+        for &(board, array, come_from) in &*cur_dist {
             for (i, &b) in array.iter().enumerate() {
                 if b && i != come_from {
                     let mut neighbor = board.clone();
@@ -285,7 +289,7 @@ fn dijkstra(
         if next_dist.is_empty() {
             return (steps, cur_dist[0].0.clone());
         }
-        std::mem::swap(&mut cur_dist, &mut next_dist);
+        std::mem::swap(cur_dist, next_dist);
         steps += 1;
     }
 }
@@ -340,7 +344,6 @@ fn product(bound: u8, reps: u8) -> Vec<Vec<u8>> {
     }
 }
 
-
 fn search(dims: Dimensions, incremental_printing: bool) {
     let mut row_counts_lists = vec![vec![]; (dims.0 * dims.1) as usize + 1];
     for row_counts in product(dims.1, dims.0) {
@@ -362,6 +365,8 @@ fn search(dims: Dimensions, incremental_printing: bool) {
     let mut map = AHashMap::new();
     let mut in_boards: Vec<(Board, usize)> = vec![];
     let mut out_boards: Vec<(Board, usize)> = vec![];
+    let mut cur_dist: Vec<(Board, [bool; 4], usize)> = vec![];
+    let mut next_dist: Vec<(Board, [bool; 4], usize)> = vec![];
     for sum in 0..dims.0 * dims.1 {
         for row_counts in &row_counts_lists[sum as usize + 1] {
             // 0: inaccessible, Max: decisionless
@@ -383,7 +388,8 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                     while !boards_set.is_empty() {
                         let board = *boards_set.iter().next().expect("Nonempty");
                         component(&board, dims, &mut map, &mut in_boards, &mut out_boards);
-                        let (dist, farthest) = dijkstra(&map, start_row, dims);
+                        let (dist, farthest) =
+                            dijkstra(&map, start_row, dims, &mut cur_dist, &mut next_dist);
                         if dist > max_depth {
                             if incremental_printing {
                                 println!(
@@ -464,14 +470,12 @@ fn search_one() {
         c: 1,
     };
     let mut map = AHashMap::new();
-    let mut in_boards: Vec<(Board, usize)> = vec![];
-    let mut out_boards: Vec<(Board, usize)> = vec![];
     component(
         &board,
         dimensions,
         &mut map,
-        &mut in_boards,
-        &mut out_boards,
+        &mut vec![],
+        &mut vec![],
     );
     println!("Seen {}", map.len());
     let target_board = Board {
@@ -480,7 +484,7 @@ fn search_one() {
         c: 2,
     };
     assert!(map.contains_key(&target_board));
-    let (dist, farthest) = dijkstra(&map, 1, dimensions);
+    let (dist, farthest) = dijkstra(&map, 1, dimensions, &mut vec![], &mut vec![]);
     println!("{}", dist);
     board.print(dimensions);
     println!();
