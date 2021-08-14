@@ -154,7 +154,7 @@ impl Board {
             }
             return vec![self];
         }
-        // Blockage set in place
+        // Blockage set in place. Note that we never have self.r == dims.0 - 1
         if cur == (self.r + 1) * dims.1 + 1 {
             if self.prefilter_out(dims) {
                 return vec![];
@@ -253,7 +253,7 @@ fn dijkstra(
     dims: Dimensions,
 ) -> (usize, Board) {
     debug_assert!(map.values().all(|(_, seen)| !seen.get()));
-    let mut cur_dist: Vec<(Board, &[bool; 4], usize)> = map
+    let mut cur_dist: Vec<(Board, [bool; 4], usize)> = map
         .iter()
         .filter(|(board, _)| {
             let index = start_row * dims.1;
@@ -261,7 +261,7 @@ fn dijkstra(
             !(bit || start_row == board.r && 0 == board.c)
         })
         // 256 is dummy entry
-        .map(|(board, (array, _))| (*board, array, 256))
+        .map(|(board, (array, _))| (*board, *array, 256))
         .collect();
     debug_assert!(!cur_dist.is_empty());
     let mut steps = 0;
@@ -277,7 +277,7 @@ fn dijkstra(
                     let previously_seen = seen.replace(true);
                     if !previously_seen {
                         let reverse_i = i ^ 1;
-                        next_dist.push((neighbor, neighbor_array, reverse_i));
+                        next_dist.push((neighbor, *neighbor_array, reverse_i));
                     }
                 }
             }
