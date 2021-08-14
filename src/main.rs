@@ -185,14 +185,21 @@ impl Board {
     }
 }
 
-// Distructively mutates seen to avoid reallocation
-fn component(board: &Board, dims: Dimensions, seen: &mut AHashMap<Board, ([bool; 4], Cell<bool>)>) {
+// Destructively mutates seen, in_boards, out_boards to avoid reallocation
+fn component<'a>(
+    board: &Board,
+    dims: Dimensions,
+    seen: &mut AHashMap<Board, ([bool; 4], Cell<bool>)>,
+    in_boards: &'a mut Vec<(Board, usize)>,
+    out_boards: &'a mut Vec<(Board, usize)>,
+) {
     seen.clear();
-    let mut in_boards = vec![(board.clone(), 2)];
+    in_boards.clear();
+    out_boards.clear();
+    in_boards.push((board.clone(), 2));
     seen.insert(board.clone(), ([false; 4], Cell::new(false)));
     assert!(board.c == 1);
     loop {
-        let mut out_boards = vec![];
         for (search_board, came_from) in in_boards.drain(..) {
             let mut successes = vec![];
             for (i, &movement) in MOVE_ARRAY.iter().enumerate() {
@@ -228,7 +235,7 @@ fn component(board: &Board, dims: Dimensions, seen: &mut AHashMap<Board, ([bool;
         if out_boards.is_empty() {
             return;
         } else {
-            in_boards = out_boards;
+            std::mem::swap(in_boards, out_boards);
         }
     }
 }
@@ -239,30 +246,32 @@ fn dijkstra(
     dims: Dimensions,
 ) -> (usize, Board) {
     debug_assert!(map.values().all(|(_, seen)| !seen.get()));
-    let mut cur_dist: Vec<(&Board, &[bool; 4])> = map
+    let mut cur_dist: Vec<(&Board, &[bool; 4], usize)> = map
         .iter()
         .filter(|(board, _)| {
             let index = start_row * dims.1;
             let bit = board.dirs.is_set(index);
             !(bit || start_row == board.r && 0 == board.c)
         })
-        .map(|(board, (array, _))| (board, array))
+        // 256 is dummy entry
+        .map(|(board, (array, _))| (board, array, 256))
         .collect();
     debug_assert!(!cur_dist.is_empty());
     let mut steps = 0;
     let mut next_dist = vec![];
     loop {
         next_dist.clear();
-        for &(board, array) in &cur_dist {
+        for &(board, array, come_from) in &cur_dist {
             for (i, &b) in array.iter().enumerate() {
-                if b {
+                if b && i != come_from {
                     let mut neighbor = board.clone();
                     neighbor.make_move(MOVE_ARRAY[i], dims);
                     let (neighbor_ref, (neighbor_array, seen)) =
                         map.get_key_value(&neighbor).expect("present");
                     let previously_seen = seen.replace(true);
                     if !previously_seen {
-                        next_dist.push((neighbor_ref, neighbor_array));
+                        let reverse_i = i ^ 1;
+                        next_dist.push((neighbor_ref, neighbor_array, reverse_i));
                     }
                 }
             }
@@ -349,6 +358,8 @@ fn search(dims: Dimensions, incremental_printing: bool) {
     let time_frequency = 60;
     let start = SystemTime::now();
     let mut map = AHashMap::new();
+    let mut in_boards: Vec<(Board, usize)> = vec![];
+    let mut out_boards: Vec<(Board, usize)> = vec![];
     for sum in 0..dims.0 * dims.1 {
         for row_counts in &row_counts_lists[sum as usize + 1] {
             // 0: inaccessible, Max: decisionless
@@ -369,7 +380,7 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                     let mut boards_set: AHashSet<Board> = boards.into_iter().collect();
                     while !boards_set.is_empty() {
                         let board = boards_set.iter().next().expect("Nonempty");
-                        component(board, dims, &mut map);
+                        component(board, dims, &mut map, &mut in_boards, &mut out_boards);
                         let (dist, farthest) = dijkstra(&map, start_row, dims);
                         if dist > max_depth {
                             if incremental_printing {
@@ -451,7 +462,15 @@ fn search_one() {
         c: 1,
     };
     let mut map = AHashMap::new();
-    component(&board, dimensions, &mut map);
+    let mut in_boards: Vec<(Board, usize)> = vec![];
+    let mut out_boards: Vec<(Board, usize)> = vec![];
+    component(
+        &board,
+        dimensions,
+        &mut map,
+        &mut in_boards,
+        &mut out_boards,
+    );
     println!("Seen {}", map.len());
     let target_board = Board {
         dirs: Bits(0b0011101011011000),
