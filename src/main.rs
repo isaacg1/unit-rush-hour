@@ -194,55 +194,64 @@ impl Board {
     }
 }
 
-// Destructively mutates seen, in_boards, out_boards to avoid reallocation
-fn component<'a>(
-    board: &Board,
-    dims: Dimensions,
-    seen: &mut AHashMap<Board, ([bool; 4], Cell<bool>)>,
-    in_boards: &'a mut Vec<(Board, usize)>,
-    out_boards: &'a mut Vec<(Board, usize)>,
-) {
-    seen.clear();
-    in_boards.clear();
-    out_boards.clear();
-    in_boards.push((*board, 2));
-    seen.insert(*board, ([false; 4], Cell::new(false)));
-    assert!(board.c == 1);
-    loop {
-        for (search_board, came_from) in in_boards.drain(..) {
-            let mut successes = vec![];
-            for (i, &movement) in MOVE_ARRAY.iter().enumerate() {
-                if &search_board == board {
-                    if i != 2 {
+// Holds seen, in_boards, out_boards to avoid reallocation
+struct ComponentSearcher {
+    seen: AHashMap<Board, ([bool; 4], Cell<bool>)>,
+    in_boards: Vec<(Board, usize)>,
+    out_boards: Vec<(Board, usize)>,
+}
+impl ComponentSearcher {
+    fn new() -> Self {
+        Self {
+            seen: AHashMap::new(),
+            in_boards: vec![],
+            out_boards: vec![],
+        }
+    }
+    // Returns reference to seen.
+    fn component(&mut self, board: &Board, dims: Dimensions) -> &AHashMap<Board, ([bool; 4], Cell<bool>)>{
+        self.seen.clear();
+        self.in_boards.clear();
+        self.out_boards.clear();
+        self.in_boards.push((*board, 2));
+        self.seen.insert(*board, ([false; 4], Cell::new(false)));
+        assert!(board.c == 1);
+        loop {
+            for (search_board, came_from) in self.in_boards.drain(..) {
+                let mut successes = vec![];
+                for (i, &movement) in MOVE_ARRAY.iter().enumerate() {
+                    if &search_board == board {
+                        if i != 2 {
+                            continue;
+                        }
+                    } else if i == came_from {
                         continue;
                     }
-                } else if i == came_from {
-                    continue;
-                }
-                let mut new_board = search_board.clone();
-                let movable = new_board.make_move(movement, dims);
-                if movable {
-                    let reverse_i = i ^ 1;
-                    let entry = seen.entry(new_board);
-                    if let Entry::Vacant(_) = entry {
-                        out_boards.push((entry.key().clone(), reverse_i));
+                    let mut new_board = search_board.clone();
+                    let movable = new_board.make_move(movement, dims);
+                    if movable {
+                        let reverse_i = i ^ 1;
+                        let entry = self.seen.entry(new_board);
+                        if let Entry::Vacant(_) = entry {
+                            self.out_boards.push((entry.key().clone(), reverse_i));
+                        }
+                        let entry = entry.or_insert(([false; 4], Cell::new(false)));
+                        entry.0[reverse_i as usize] = true;
+                        successes.push(i);
                     }
-                    let entry = entry.or_insert(([false; 4], Cell::new(false)));
-                    entry.0[reverse_i as usize] = true;
-                    successes.push(i);
+                }
+                if !successes.is_empty() {
+                    let board_neighbors = &mut self.seen.get_mut(&search_board).expect("Present").0;
+                    for i in successes {
+                        board_neighbors[i as usize] = true;
+                    }
                 }
             }
-            if !successes.is_empty() {
-                let board_neighbors = &mut seen.get_mut(&search_board).expect("Present").0;
-                for i in successes {
-                    board_neighbors[i as usize] = true;
-                }
+            if self.out_boards.is_empty() {
+                return &self.seen;
+            } else {
+                std::mem::swap(&mut self.in_boards, &mut self.out_boards);
             }
-        }
-        if out_boards.is_empty() {
-            return;
-        } else {
-            std::mem::swap(in_boards, out_boards);
         }
     }
 }
@@ -362,9 +371,7 @@ fn search(dims: Dimensions, incremental_printing: bool) {
     let mut last_print_time = 0;
     let time_frequency = 60;
     let start = SystemTime::now();
-    let mut map = AHashMap::new();
-    let mut in_boards: Vec<(Board, usize)> = vec![];
-    let mut out_boards: Vec<(Board, usize)> = vec![];
+    let mut component_searcher = ComponentSearcher::new();
     let mut cur_dist: Vec<(Board, [bool; 4], usize)> = vec![];
     let mut next_dist: Vec<(Board, [bool; 4], usize)> = vec![];
     for sum in 0..dims.0 * dims.1 {
@@ -387,9 +394,9 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                     let mut boards_set: AHashSet<Board> = boards.into_iter().collect();
                     while !boards_set.is_empty() {
                         let board = *boards_set.iter().next().expect("Nonempty");
-                        component(&board, dims, &mut map, &mut in_boards, &mut out_boards);
+                        let map = component_searcher.component(&board, dims);
                         let (dist, farthest) =
-                            dijkstra(&map, start_row, dims, &mut cur_dist, &mut next_dist);
+                            dijkstra(map, start_row, dims, &mut cur_dist, &mut next_dist);
                         if dist > max_depth {
                             if incremental_printing {
                                 println!(
@@ -469,14 +476,8 @@ fn search_one() {
         r: 1,
         c: 1,
     };
-    let mut map = AHashMap::new();
-    component(
-        &board,
-        dimensions,
-        &mut map,
-        &mut vec![],
-        &mut vec![],
-    );
+    let mut component_searcher = ComponentSearcher::new();
+    let map = component_searcher.component(&board, dimensions);
     println!("Seen {}", map.len());
     let target_board = Board {
         dirs: Bits(0b0011101011011000),
