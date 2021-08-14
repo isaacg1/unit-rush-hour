@@ -129,54 +129,96 @@ impl Board {
     // Sums must be equal.
     // Can speed up by fast-filling cols
     fn generate(
-        self,
+        mut self,
         row_counts: &[u8],
         col_counts: &[u8],
-        cur_r: u8,
-        cur_c: u8,
+        cur: u8,
+        total: u8,
         dims: Dimensions,
     ) -> Vec<Board> {
-        let debug = false;
-        if debug {
-            self.print(dims);
-            println!("{:?} {:?} {} {}", row_counts, col_counts, cur_r, cur_c);
-            println!();
-        }
-        debug_assert!(cur_r < dims.0 || cur_r == dims.0 && cur_c == 0);
-        debug_assert!(cur_c < dims.1);
         debug_assert_eq!(row_counts.iter().sum::<u8>(), col_counts.iter().sum::<u8>());
-        let count: u8 = row_counts.iter().sum();
-        if count == 0 {
+        if total == 0 {
             return vec![self];
         }
-        if cur_r == dims.0 {
+        let cur_r = cur / dims.1;
+        let cur_c = cur % dims.1;
+        if cur_r >= dims.0 {
             return vec![];
         }
-        let (next_r, next_c) = if cur_c == dims.1 - 1 {
-            (cur_r + 1, 0)
-        } else {
-            (cur_r, cur_c + 1)
-        };
+        if self.dirs.is_set(cur) {
+            return self.generate(row_counts, col_counts, cur + 1, total, dims);
+        }
+        if row_counts[cur_r as usize] == dims.1 - cur_c {
+            if total == dims.1 - cur_c {
+                for i in cur_c..dims.1 {
+                    self.dirs.set(i + cur_r * dims.1);
+                }
+                return vec![self];
+            }
+            if cur_c <= self.c && cur_r == self.r {
+                return vec![];
+            }
+            let mut new_row_counts = row_counts.to_owned();
+            let mut new_col_counts = col_counts.to_owned();
+            for i in cur_c..dims.1 {
+                if new_col_counts[i as usize] > 0 {
+                    new_col_counts[i as usize] -= 1;
+                    self.dirs.set(i + cur_r * dims.1);
+                } else {
+                    return vec![];
+                }
+            }
+            new_row_counts[cur_r as usize] = 0;
+            return self.generate(
+                &new_row_counts,
+                &new_col_counts,
+                cur + (dims.1 - cur_c),
+                total - (dims.1 - cur_c),
+                dims,
+            );
+        }
+        if col_counts[cur_c as usize] == dims.0 - cur_r {
+            if cur_c <= self.c && cur_r <= self.r {
+                return vec![];
+            }
+            let mut new_row_counts = row_counts.to_owned();
+            let mut new_col_counts = col_counts.to_owned();
+            for i in cur_r..dims.0 {
+                if new_row_counts[i as usize] > 0 {
+                    new_row_counts[i as usize] -= 1;
+                    self.dirs.set(cur_c + i * dims.1);
+                } else {
+                    return vec![];
+                }
+            }
+            new_col_counts[cur_c as usize] = 0;
+            return self.generate(
+                &new_row_counts,
+                &new_col_counts,
+                cur + 1,
+                total - (dims.0 - cur_r),
+                dims,
+            );
+        }
         let set_true = if row_counts[cur_r as usize] > 0
             && col_counts[cur_c as usize] > 0
             // cur_c must be greater than self.c, because both cursor and left are auto horiz
             && (cur_r != self.r || cur_c > self.c )
         {
             let mut new_board = self.clone();
-            new_board.dirs.set(cur_r * dims.1 + cur_c);
+            new_board.dirs.set(cur);
             let mut new_row_counts = row_counts.to_owned();
             new_row_counts[cur_r as usize] -= 1;
             let mut new_col_counts = col_counts.to_owned();
             new_col_counts[cur_c as usize] -= 1;
-            new_board.generate(&new_row_counts, &new_col_counts, next_r, next_c, dims)
+            new_board.generate(&new_row_counts, &new_col_counts, cur + 1, total - 1, dims)
         } else {
             vec![]
         };
         let mut set_false = if row_counts[cur_r as usize] < dims.1 - cur_c
             && col_counts[cur_c as usize] < dims.0 - cur_r
-            && next_r < dims.0
         {
-            self.generate(row_counts, col_counts, next_r, next_c, dims)
+            self.generate(row_counts, col_counts, cur + 1, total, dims)
         } else {
             vec![]
         };
@@ -207,10 +249,8 @@ fn component<'a>(
                     if i != 2 {
                         continue;
                     }
-                } else {
-                    if i == came_from {
-                        continue;
-                    }
+                } else if i == came_from {
+                    continue;
                 }
                 let mut new_board = search_board.clone();
                 let movable = new_board.make_move(movement, dims);
@@ -288,7 +328,7 @@ fn dijkstra(
 // Cursor counts as vert for row and horiz for col, so we subtract 1 from row.
 // Must also be in starting position, c == 1.
 fn generate(
-    row_counts: &Vec<u8>,
+    row_counts: &[u8],
     col_counts: &[u8],
     start_row: u8,
     dims: Dimensions,
@@ -308,7 +348,7 @@ fn generate(
     assert_eq!(row_sum, col_sum);
     if start_row * 2 + 1 == dims.0 {
         let rev_rows: Vec<u8> = row_counts.iter().cloned().rev().collect();
-        if &rev_rows > row_counts {
+        if row_counts < &rev_rows {
             return vec![];
         }
     }
@@ -318,7 +358,7 @@ fn generate(
         r: start_row,
         c: 1,
     };
-    let results = board.generate(&fixed_row_counts, col_counts, 0, 0, dims);
+    let results = board.generate(&fixed_row_counts, col_counts, 0, row_sum, dims);
     all_outs.extend(results);
     all_outs
 }
@@ -560,7 +600,7 @@ fn main() {
         0 => explore(),
         1 => search_one(),
         2 => {
-            for dims in vec![(4, 4), (4, 5), (5, 4)] {
+            for dims in [(4, 4), (4, 5), (5, 4)] {
                 search(dims, false);
             }
         }
