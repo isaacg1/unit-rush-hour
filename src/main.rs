@@ -23,31 +23,50 @@ impl Move {
 }
 const MOVE_ARRAY: [Move; 4] = [Move::Up, Move::Down, Move::Left, Move::Right];
 
-fn bits_to_vec(num: u64, len: u8) -> Vec<bool> {
+fn _bits_to_vec(num: u64, len: u8) -> Vec<bool> {
     assert!(len <= 64);
     (0..len).map(|i| num & (1 << i) != 0).collect()
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Debug, Hash)]
+struct Bits(u64);
+impl Bits {
+    fn is_set(&self, index: u8) -> bool {
+        let inner = self.0;
+        inner & 1 << index != 0
+    }
+    fn is_unset(&self, index: u8) -> bool {
+        let inner = self.0;
+        inner & 1 << index == 0
+    }
+    fn set(&mut self, index: u8) {
+        self.0 |= 1 << index;
+    }
+    fn unset(&mut self, index: u8) {
+        self.0 &= !(1 << index);
+    }
+}
+
 #[derive(Clone, Eq, PartialEq, Hash, Debug, PartialOrd, Ord)]
 struct Board {
-    dirs: Vec<bool>,
+    dirs: Bits,
     r: u8,
     c: u8,
 }
 impl Board {
     fn print(&self, dims: Dimensions) {
-        debug_assert!(self.r < dims.0 || self.r == dims.0 && self.c == 0);
-        debug_assert!(self.c < dims.1);
-        debug_assert!(self.dirs.len() >= (dims.0 * dims.1) as usize);
+        assert!(self.r < dims.0 || self.r == dims.0 && self.c == 0);
+        assert!(self.c < dims.1);
+        assert!(64 >= dims.0 * dims.1);
         // Convention: Under current location is false.
-        debug_assert!(!self.dirs[(self.r * dims.1 + self.c) as usize]);
+        assert!(self.dirs.is_unset(self.r * dims.1 + self.c));
         for r in 0..dims.0 {
             for c in 0..dims.1 {
                 let string = if r == self.r && c == self.c {
                     "o"
                 } else {
                     let index = r * dims.1 + c;
-                    if self.dirs[index as usize] {
+                    if self.dirs.is_set(index) {
                         "|"
                     } else {
                         "-"
@@ -62,7 +81,7 @@ impl Board {
     fn make_move(&mut self, movement: Move, dims: Dimensions) -> bool {
         debug_assert!(self.r < dims.0);
         debug_assert!(self.c < dims.1);
-        debug_assert!(self.dirs.len() >= (dims.0 * dims.1) as usize);
+        debug_assert!(64 >= dims.0 * dims.1);
         let (new_r, new_c) = match movement {
             Move::Up => {
                 if self.r == 0 {
@@ -90,10 +109,15 @@ impl Board {
             }
         };
         let new_index = new_r * dims.1 + new_c;
-        let new_bit = self.dirs[new_index as usize];
+        let new_bit = self.dirs.is_set(new_index);
         if new_bit == movement.vertical() {
             let old_index = self.r * dims.1 + self.c;
-            self.dirs.swap(new_index as usize, old_index as usize);
+            // Set if new_bit. Was false
+            if new_bit {
+                self.dirs.set(old_index)
+            }
+            // Unset
+            self.dirs.unset(new_index);
             self.r = new_r;
             self.c = new_c;
             true
@@ -139,7 +163,7 @@ impl Board {
             && (cur_r != self.r || cur_c > self.c )
         {
             let mut new_board = self.clone();
-            new_board.dirs[(cur_r * dims.1 + cur_c) as usize] = true;
+            new_board.dirs.set(cur_r * dims.1 + cur_c);
             let mut new_row_counts = row_counts.to_owned();
             new_row_counts[cur_r as usize] -= 1;
             let mut new_col_counts = col_counts.to_owned();
@@ -219,15 +243,16 @@ fn dijkstra(
         .iter()
         .filter(|(board, _)| {
             let index = start_row * dims.1;
-            let bit = board.dirs[index as usize];
+            let bit = board.dirs.is_set(index);
             !(bit || start_row == board.r && 0 == board.c)
         })
         .map(|(board, (array, _))| (board, array))
         .collect();
     debug_assert!(!cur_dist.is_empty());
     let mut steps = 0;
+    let mut next_dist = vec![];
     loop {
-        let mut next_dist = vec![];
+        next_dist.clear();
         for &(board, array) in &cur_dist {
             for (i, &b) in array.iter().enumerate() {
                 if b {
@@ -245,7 +270,7 @@ fn dijkstra(
         if next_dist.is_empty() {
             return (steps, cur_dist[0].0.clone());
         }
-        cur_dist = next_dist;
+        std::mem::swap(&mut cur_dist, &mut next_dist);
         steps += 1;
     }
 }
@@ -280,7 +305,7 @@ fn generate(
     }
 
     let board = Board {
-        dirs: vec![false; (dims.0 * dims.1) as usize],
+        dirs: Bits(0),
         r: start_row,
         c: 1,
     };
@@ -320,6 +345,8 @@ fn search(dims: Dimensions, incremental_printing: bool) {
     let mut deepest = None;
     let frequency = 1_000_000;
     let mut comps_search = 0;
+    let mut last_print_time = 0;
+    let time_frequency = 60;
     let start = SystemTime::now();
     let mut map = AHashMap::new();
     for sum in 0..dims.0 * dims.1 {
@@ -366,23 +393,27 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                         for comp_board in map.keys() {
                             if comp_board.r == start_row
                                 && comp_board.c == 1
-                                && !comp_board.dirs[(start_row * dims.1) as usize]
+                                && comp_board.dirs.is_unset(start_row * dims.1)
                             {
                                 boards_set.remove(comp_board);
                             }
                         }
                         comps_search += 1;
                         if incremental_printing && comps_search % frequency == 0 {
-                            println!(
-                                "{} {} {:?} {:?} {} {} {}",
-                                comps_search,
-                                sum,
-                                row_counts,
-                                col_counts,
-                                map.len(),
-                                boards_set.len(),
-                                start.elapsed().expect("Positive").as_secs()
-                            );
+                            let time = start.elapsed().expect("Positive").as_secs();
+                            if time - last_print_time > time_frequency {
+                                last_print_time = time;
+                                println!(
+                                    "{} {} {:?} {:?} {} {} {}",
+                                    comps_search,
+                                    sum,
+                                    row_counts,
+                                    col_counts,
+                                    map.len(),
+                                    boards_set.len(),
+                                    time,
+                                );
+                            }
                         }
                     }
                 }
@@ -390,7 +421,12 @@ fn search(dims: Dimensions, incremental_printing: bool) {
         }
     }
     let (start_row, farthest) = deepest.expect("Found one");
-    println!("Farthest in {}: Row {}", max_depth, start_row);
+    println!(
+        "Farthest in {}, time {}: Row {}",
+        max_depth,
+        start.elapsed().expect("Positive").as_secs(),
+        start_row
+    );
     farthest.print(dims);
 }
 
@@ -410,7 +446,7 @@ fn search_all() {
 fn search_one() {
     let dimensions = (4, 4);
     let board = Board {
-        dirs: bits_to_vec(0b1010101111000001, 16),
+        dirs: Bits(0b1010101111000001),
         r: 1,
         c: 1,
     };
@@ -418,7 +454,7 @@ fn search_one() {
     component(&board, dimensions, &mut map);
     println!("Seen {}", map.len());
     let target_board = Board {
-        dirs: bits_to_vec(0b0011101011011000, 16),
+        dirs: Bits(0b0011101011011000),
         r: 2,
         c: 2,
     };
@@ -432,7 +468,7 @@ fn search_one() {
 
 fn explore() {
     let mut board = Board {
-        dirs: bits_to_vec(0b0110100110010100, 16),
+        dirs: Bits(0b0110100110010100),
         r: 0,
         c: 1,
     };
@@ -457,7 +493,7 @@ fn play(option: usize) {
     let (mut board, dims, target_row) = match option {
         0 => (
             Board {
-                dirs: bits_to_vec(0b0011101011011000, 16),
+                dirs: Bits(0b0011101011011000),
                 r: 2,
                 c: 2,
             },
@@ -466,7 +502,7 @@ fn play(option: usize) {
         ),
         1 => (
             Board {
-                dirs: bits_to_vec(0b00011001101101111110, 20),
+                dirs: Bits(0b00011001101101111110),
                 r: 3,
                 c: 2,
             },
@@ -477,7 +513,7 @@ fn play(option: usize) {
     };
     let mut steps = 0;
     println!("wasd keys");
-    while board.dirs[(target_row * dims.1) as usize] || board.r == target_row && board.c == 0 {
+    while board.dirs.is_set(target_row * dims.1) || board.r == target_row && board.c == 0 {
         println!("Steps {}, Goal row {}", steps, target_row);
         board.print(dims);
         let mut string = String::new();
