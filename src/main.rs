@@ -47,7 +47,7 @@ impl Bits {
     }
 }
 
-#[derive(Clone, Eq, PartialEq, Hash, Debug, PartialOrd, Ord)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, PartialOrd, Ord)]
 struct Board {
     dirs: Bits,
     r: u8,
@@ -192,8 +192,8 @@ fn component<'a>(
     seen.clear();
     in_boards.clear();
     out_boards.clear();
-    in_boards.push((board.clone(), 2));
-    seen.insert(board.clone(), ([false; 4], Cell::new(false)));
+    in_boards.push((*board, 2));
+    seen.insert(*board, ([false; 4], Cell::new(false)));
     assert!(board.c == 1);
     loop {
         for (search_board, came_from) in in_boards.drain(..) {
@@ -240,7 +240,7 @@ fn dijkstra(
     dims: Dimensions,
 ) -> (usize, Board) {
     debug_assert!(map.values().all(|(_, seen)| !seen.get()));
-    let mut cur_dist: Vec<(&Board, &[bool; 4], usize)> = map
+    let mut cur_dist: Vec<(Board, &[bool; 4], usize)> = map
         .iter()
         .filter(|(board, _)| {
             let index = start_row * dims.1;
@@ -248,7 +248,7 @@ fn dijkstra(
             !(bit || start_row == board.r && 0 == board.c)
         })
         // 256 is dummy entry
-        .map(|(board, (array, _))| (board, array, 256))
+        .map(|(board, (array, _))| (*board, array, 256))
         .collect();
     debug_assert!(!cur_dist.is_empty());
     let mut steps = 0;
@@ -260,12 +260,11 @@ fn dijkstra(
                 if b && i != come_from {
                     let mut neighbor = board.clone();
                     neighbor.make_move(MOVE_ARRAY[i], dims);
-                    let (neighbor_ref, (neighbor_array, seen)) =
-                        map.get_key_value(&neighbor).expect("present");
+                    let (neighbor_array, seen) = &map[&neighbor];
                     let previously_seen = seen.replace(true);
                     if !previously_seen {
                         let reverse_i = i ^ 1;
-                        next_dist.push((neighbor_ref, neighbor_array, reverse_i));
+                        next_dist.push((neighbor, neighbor_array, reverse_i));
                     }
                 }
             }
@@ -328,6 +327,13 @@ fn product(bound: u8, reps: u8) -> Vec<Vec<u8>> {
     }
 }
 
+fn prefiler_out(board: &Board, dims: Dimensions) -> bool {
+    debug_assert!(board.c == 1);
+    let up_blocked = board.r == 0 || board.dirs.is_unset((board.r - 1) * dims.1);
+    let down_blocked = board.r == dims.0 - 1 || board.dirs.is_unset((board.r + 1) * dims.1);
+    up_blocked && down_blocked
+}
+
 fn search(dims: Dimensions, incremental_printing: bool) {
     let mut row_counts_lists = vec![vec![]; (dims.0 * dims.1) as usize + 1];
     for row_counts in product(dims.1, dims.0) {
@@ -368,8 +374,12 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                     let boards = generate(row_counts, col_counts, start_row, dims);
                     let mut boards_set: AHashSet<Board> = boards.into_iter().collect();
                     while !boards_set.is_empty() {
-                        let board = boards_set.iter().next().expect("Nonempty");
-                        component(board, dims, &mut map, &mut in_boards, &mut out_boards);
+                        let board = *boards_set.iter().next().expect("Nonempty");
+                        if prefiler_out(&board, dims) {
+                            boards_set.remove(&board);
+                            continue;
+                        }
+                        component(&board, dims, &mut map, &mut in_boards, &mut out_boards);
                         let (dist, farthest) = dijkstra(&map, start_row, dims);
                         if dist > max_depth {
                             if incremental_printing {
