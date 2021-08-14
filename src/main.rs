@@ -164,11 +164,15 @@ fn component(board: &Board, dims: Dimensions) -> AHashMap<Board, ([bool; 4], Cel
     let mut in_boards = vec![board.clone()];
     let mut seen: AHashMap<Board, ([bool; 4], Cell<bool>)> = AHashMap::new();
     seen.insert(board.clone(), ([false; 4], Cell::new(false)));
+    assert!(board.c == 1);
     loop {
         let mut out_boards = vec![];
-        for board in in_boards {
+        for search_board in in_boards {
             for (i, &movement) in MOVE_ARRAY.iter().enumerate() {
-                let mut new_board = board.clone();
+                if &search_board == board && i != 2 {
+                    continue
+                }
+                let mut new_board = search_board.clone();
                 let movable = new_board.make_move(movement, dims);
                 if movable {
                     let entry = seen.entry(new_board).or_insert_with_key(|board| {
@@ -177,7 +181,7 @@ fn component(board: &Board, dims: Dimensions) -> AHashMap<Board, ([bool; 4], Cel
                     });
                     let reverse_i = i ^ 1;
                     entry.0[reverse_i as usize] = true;
-                    let board_neighbors = &mut seen.get_mut(&board).expect("Present");
+                    let board_neighbors = &mut seen.get_mut(&search_board).expect("Present");
                     board_neighbors.0[i as usize] = true;
                 }
             }
@@ -194,7 +198,8 @@ fn dijkstra(
     map: &AHashMap<Board, ([bool; 4], Cell<bool>)>,
     start_row: u8,
     dims: Dimensions,
-) -> Option<(usize, Board)> {
+) -> (usize, Board) {
+    debug_assert!(map.values().all(|(_, seen)| !seen.get()));
     let mut cur_dist: Vec<(&Board, &[bool; 4])> = map
         .iter()
         .filter(|(board, _)| {
@@ -204,8 +209,7 @@ fn dijkstra(
         })
         .map(|(board, (array, _))| (board, array))
         .collect();
-    // Clear seen info
-    map.values().for_each(|(_, seen)| seen.set(false));
+    debug_assert!(!cur_dist.is_empty());
     let mut steps = 0;
     loop {
         let mut next_dist = vec![];
@@ -224,7 +228,7 @@ fn dijkstra(
             }
         }
         if next_dist.is_empty() {
-            return cur_dist.first().map(|&(board, _)| (steps, board.clone()));
+            return (steps, cur_dist[0].0.clone());
         }
         cur_dist = next_dist;
         steps += 1;
@@ -283,7 +287,7 @@ fn product(bound: u8, reps: u8) -> Vec<Vec<u8>> {
     }
 }
 
-fn search(dims: Dimensions) {
+fn search(dims: Dimensions, incremental_printing: bool) {
     let mut row_counts_lists = vec![vec![]; (dims.0 * dims.1) as usize + 1];
     for row_counts in product(dims.1, dims.0) {
         let count: u8 = row_counts.iter().sum();
@@ -296,7 +300,6 @@ fn search(dims: Dimensions) {
     }
     let mut max_depth = 0;
     let mut deepest = None;
-    let incremental_printing = true;
     let frequency = 1_000_000;
     let mut comps_search = 0;
     let start = SystemTime::now();
@@ -320,23 +323,18 @@ fn search(dims: Dimensions) {
                 while !boards_set.is_empty() {
                     let board = boards_set.iter().next().expect("Nonempty");
                     let map = component(board, dims);
-                    // By symmetry, can ignore lower half of start rows
-                    // Further speedup: If middle, symmetry.
-                    for start_row in 0..(dims.0 + 1) / 2 {
-                        let pair = dijkstra(&map, start_row, dims);
-                        if pair.is_none() {
-                            continue;
-                        }
-                        let (dist, farthest) = pair.expect("Checked");
+                    let start_row = board.r;
+                        let (dist, farthest) = dijkstra(&map, start_row, dims);
                         if dist > max_depth {
                             if incremental_printing {
                                 println!(
-                                    "{} {} {:?} {:?} {} {} {}",
+                                    "{} {} {:?} {:?} {} {} {} {}",
                                     dist,
                                     sum,
                                     row_counts,
                                     col_counts,
                                     start_row,
+                                    map.len(),
                                     comps_search,
                                     start.elapsed().expect("Positive").as_secs()
                                 );
@@ -346,9 +344,10 @@ fn search(dims: Dimensions) {
                             max_depth = dist;
                             deepest = Some((start_row, farthest));
                         }
-                    }
-                    for board in map.keys() {
-                        boards_set.remove(board);
+                    for comp_board in map.keys() {
+                        if comp_board.r == start_row {
+                            boards_set.remove(comp_board);
+                        }
                     }
                     comps_search += 1;
                     if incremental_printing && comps_search % frequency == 0 {
@@ -380,7 +379,7 @@ fn search_all() {
             vec![(sum / 2, sum / 2 + 1), (sum / 2 + 1, sum / 2)]
         };
         for dims in dim_pairs {
-            search(dims);
+            search(dims, true);
         }
     }
 }
@@ -400,7 +399,7 @@ fn search_one() {
         c: 2,
     };
     assert!(map.contains_key(&target_board));
-    let (dist, farthest) = dijkstra(&map, 1, dimensions).expect("Possible");
+    let (dist, farthest) = dijkstra(&map, 1, dimensions);
     println!("{}", dist);
     board.print(dimensions);
     println!();
@@ -450,7 +449,7 @@ fn play(option: usize) {
             (5, 4),
             1,
         ),
-        _ => unimplemented!()
+        _ => unimplemented!(),
     };
     let mut steps = 0;
     println!("wasd keys");
@@ -481,7 +480,11 @@ fn main() {
     match choice {
         0 => explore(),
         1 => search_one(),
-        2 => search((5, 4)),
+        2 => {
+            for dims in vec![(4, 4), (4, 5), (5, 4)] {
+                search(dims, false);
+            }
+        }
         3 => search_all(),
         4 => play(1),
         _ => unimplemented!(),
