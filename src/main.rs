@@ -348,7 +348,10 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                             deepest = Some((start_row, farthest));
                         }
                         for comp_board in map.keys() {
-                            if comp_board.r == start_row {
+                            if comp_board.r == start_row
+                                && comp_board.c == 1
+                                && !comp_board.dirs[(start_row * dims.1) as usize]
+                            {
                                 boards_set.remove(comp_board);
                             }
                         }
