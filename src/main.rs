@@ -154,6 +154,12 @@ impl Board {
             }
             return vec![self];
         }
+        // Blockage set in place
+        if cur == (self.r + 1) * dims.1 + 1 {
+            if self.prefilter_out(dims) {
+                return vec![];
+            }
+        }
         let set_true = if row_counts[cur_r as usize] > 0
             && col_counts[cur_c as usize] > 0
             // cur_c must be greater than self.c, because both cursor and left are auto horiz
@@ -178,6 +184,13 @@ impl Board {
         };
         set_false.extend(set_true);
         set_false
+    }
+    // Can't possibly succeed.
+    fn prefilter_out(&self, dims: Dimensions) -> bool {
+        debug_assert!(self.c == 1);
+        let up_blocked = self.r == 0 || self.dirs.is_unset((self.r - 1) * dims.1);
+        let down_blocked = self.r == dims.0 - 1 || self.dirs.is_unset((self.r + 1) * dims.1);
+        up_blocked && down_blocked
     }
 }
 
@@ -327,12 +340,6 @@ fn product(bound: u8, reps: u8) -> Vec<Vec<u8>> {
     }
 }
 
-fn prefiler_out(board: &Board, dims: Dimensions) -> bool {
-    debug_assert!(board.c == 1);
-    let up_blocked = board.r == 0 || board.dirs.is_unset((board.r - 1) * dims.1);
-    let down_blocked = board.r == dims.0 - 1 || board.dirs.is_unset((board.r + 1) * dims.1);
-    up_blocked && down_blocked
-}
 
 fn search(dims: Dimensions, incremental_printing: bool) {
     let mut row_counts_lists = vec![vec![]; (dims.0 * dims.1) as usize + 1];
@@ -375,10 +382,6 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                     let mut boards_set: AHashSet<Board> = boards.into_iter().collect();
                     while !boards_set.is_empty() {
                         let board = *boards_set.iter().next().expect("Nonempty");
-                        if prefiler_out(&board, dims) {
-                            boards_set.remove(&board);
-                            continue;
-                        }
                         component(&board, dims, &mut map, &mut in_boards, &mut out_boards);
                         let (dist, farthest) = dijkstra(&map, start_row, dims);
                         if dist > max_depth {
