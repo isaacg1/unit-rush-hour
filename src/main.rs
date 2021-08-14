@@ -1,6 +1,7 @@
 use ahash::{AHashMap, AHashSet};
 
 use std::cell::Cell;
+use std::collections::hash_map::Entry;
 use std::time::SystemTime;
 
 type Dimensions = (u8, u8);
@@ -160,34 +161,48 @@ impl Board {
     }
 }
 
-fn component(board: &Board, dims: Dimensions) -> AHashMap<Board, ([bool; 4], Cell<bool>)> {
-    let mut in_boards = vec![board.clone()];
-    let mut seen: AHashMap<Board, ([bool; 4], Cell<bool>)> = AHashMap::new();
+// Distructively mutates seen to avoid reallocation
+fn component(board: &Board, dims: Dimensions, seen: &mut AHashMap<Board, ([bool; 4], Cell<bool>)>) {
+    seen.clear();
+    let mut in_boards = vec![(board.clone(), 2)];
     seen.insert(board.clone(), ([false; 4], Cell::new(false)));
     assert!(board.c == 1);
     loop {
         let mut out_boards = vec![];
-        for search_board in in_boards {
+        for (search_board, came_from) in in_boards.drain(..) {
+            let mut successes = vec![];
             for (i, &movement) in MOVE_ARRAY.iter().enumerate() {
-                if &search_board == board && i != 2 {
-                    continue;
+                if &search_board == board {
+                    if i != 2 {
+                        continue;
+                    }
+                } else {
+                    if i == came_from {
+                        continue;
+                    }
                 }
                 let mut new_board = search_board.clone();
                 let movable = new_board.make_move(movement, dims);
                 if movable {
-                    let entry = seen.entry(new_board).or_insert_with_key(|board| {
-                        out_boards.push(board.clone());
-                        ([false; 4], Cell::new(false))
-                    });
                     let reverse_i = i ^ 1;
+                    let entry = seen.entry(new_board);
+                    if let Entry::Vacant(_) = entry {
+                        out_boards.push((entry.key().clone(), reverse_i));
+                    }
+                    let entry = entry.or_insert(([false; 4], Cell::new(false)));
                     entry.0[reverse_i as usize] = true;
-                    let board_neighbors = &mut seen.get_mut(&search_board).expect("Present");
-                    board_neighbors.0[i as usize] = true;
+                    successes.push(i);
+                }
+            }
+            if !successes.is_empty() {
+                let board_neighbors = &mut seen.get_mut(&search_board).expect("Present").0;
+                for i in successes {
+                    board_neighbors[i as usize] = true;
                 }
             }
         }
         if out_boards.is_empty() {
-            return seen;
+            return;
         } else {
             in_boards = out_boards;
         }
@@ -306,6 +321,7 @@ fn search(dims: Dimensions, incremental_printing: bool) {
     let frequency = 1_000_000;
     let mut comps_search = 0;
     let start = SystemTime::now();
+    let mut map = AHashMap::new();
     for sum in 0..dims.0 * dims.1 {
         for row_counts in &row_counts_lists[sum as usize + 1] {
             // 0: inaccessible, Max: decisionless
@@ -326,7 +342,7 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                     let mut boards_set: AHashSet<Board> = boards.into_iter().collect();
                     while !boards_set.is_empty() {
                         let board = boards_set.iter().next().expect("Nonempty");
-                        let map = component(board, dims);
+                        component(board, dims, &mut map);
                         let (dist, farthest) = dijkstra(&map, start_row, dims);
                         if dist > max_depth {
                             if incremental_printing {
@@ -398,7 +414,8 @@ fn search_one() {
         r: 1,
         c: 1,
     };
-    let map = component(&board, dimensions);
+    let mut map = AHashMap::new();
+    component(&board, dimensions, &mut map);
     println!("Seen {}", map.len());
     let target_board = Board {
         dirs: bits_to_vec(0b0011101011011000, 16),
