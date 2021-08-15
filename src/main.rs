@@ -149,6 +149,7 @@ struct ComponentSearcher {
     out_boards: Vec<(Board, Move)>,
     out_remove: Vec<Board>,
     out_initialize: Vec<(Board, [bool; 4], usize)>,
+    successes: Vec<usize>,
 }
 impl ComponentSearcher {
     fn new() -> Self {
@@ -158,6 +159,7 @@ impl ComponentSearcher {
             out_boards: vec![],
             out_remove: vec![],
             out_initialize: vec![],
+            successes: vec![],
         }
     }
     // Just access elements directly
@@ -173,7 +175,6 @@ impl ComponentSearcher {
         assert!(board.c == 1);
         loop {
             for (search_board, came_from) in self.in_boards.drain(..) {
-                let mut successes = vec![];
                 for (i, &movement) in MOVE_ARRAY.iter().enumerate() {
                     // Don't need to search back
                     if movement == came_from {
@@ -206,15 +207,15 @@ impl ComponentSearcher {
                         let entry = entry.or_insert(([false; 4], false));
                         let reverse_i = i ^ 1;
                         entry.0[reverse_i as usize] = true;
-                        successes.push(i);
+                        self.successes.push(i);
                     }
                 }
                 let initializer = search_board.r == board.r
                     && search_board.c == 0
                     && search_board.dirs.is_unset(board.r * dims.1 + 1);
-                if !successes.is_empty() || initializer {
+                if !self.successes.is_empty() || initializer {
                     let board_neighbors = &mut self.seen.get_mut(&search_board).expect("Present").0;
-                    for i in successes {
+                    for i in self.successes.drain(..) {
                         board_neighbors[i as usize] = true;
                     }
                     if initializer {
