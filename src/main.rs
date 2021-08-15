@@ -1,6 +1,5 @@
 use ahash::{AHashMap, AHashSet};
 
-use std::cell::Cell;
 use std::collections::hash_map::Entry;
 use std::time::SystemTime;
 
@@ -194,7 +193,7 @@ impl Board {
 
 // Holds seen, in_boards, out_boards to avoid reallocation
 struct ComponentSearcher {
-    seen: AHashMap<Board, ([bool; 4], Cell<bool>)>,
+    seen: AHashMap<Board, ([bool; 4], bool)>,
     in_boards: Vec<(Board, usize)>,
     out_boards: Vec<(Board, usize)>,
 }
@@ -211,12 +210,12 @@ impl ComponentSearcher {
         &mut self,
         board: &Board,
         dims: Dimensions,
-    ) -> &AHashMap<Board, ([bool; 4], Cell<bool>)> {
+    ) -> &mut AHashMap<Board, ([bool; 4], bool)> {
         self.seen.clear();
         self.in_boards.clear();
         self.out_boards.clear();
         self.in_boards.push((*board, 2));
-        self.seen.insert(*board, ([false; 4], Cell::new(false)));
+        self.seen.insert(*board, ([false; 4], false));
         assert!(board.c == 1);
         loop {
             for (search_board, came_from) in self.in_boards.drain(..) {
@@ -237,7 +236,7 @@ impl ComponentSearcher {
                         if let Entry::Vacant(_) = entry {
                             self.out_boards.push((new_board, reverse_i));
                         }
-                        let entry = entry.or_insert(([false; 4], Cell::new(false)));
+                        let entry = entry.or_insert(([false; 4], false));
                         entry.0[reverse_i as usize] = true;
                         successes.push(i);
                     }
@@ -250,7 +249,7 @@ impl ComponentSearcher {
                 }
             }
             if self.out_boards.is_empty() {
-                return &self.seen;
+                return &mut self.seen;
             } else {
                 std::mem::swap(&mut self.in_boards, &mut self.out_boards);
             }
@@ -272,37 +271,40 @@ impl DijkstraSearcher {
     }
     fn dijkstra(
         &mut self,
-        map: &AHashMap<Board, ([bool; 4], Cell<bool>)>,
+        map: &mut AHashMap<Board, ([bool; 4], bool)>,
         start_row: u8,
         dims: Dimensions,
     ) -> (usize, Board) {
-        debug_assert!(map.values().all(|(_, seen)| !seen.get()));
+        debug_assert!(map.values().all(|(_, seen)| !seen));
         self.cur_dist.clear();
         self.next_dist.clear();
         self.cur_dist.extend(
             map.iter()
                 .filter(|(board, _)| {
-                    let index = start_row * dims.1;
-                    let bit = board.dirs.is_set(index);
-                    !(bit || start_row == board.r && 0 == board.c)
+                    start_row == board.r
+                        && 0 == board.c
+                        && board.dirs.is_unset(start_row * dims.1 + 1)
                 })
-                // 256 is dummy entry
-                .map(|(board, (array, _))| (*board, *array, 256)),
+                .map(|(board, (array, _))| (*board, *array, 3)),
         );
         debug_assert!(!self.cur_dist.is_empty());
-        let mut steps = 0;
+        let mut steps = 1;
         loop {
             for &(board, array, come_from) in &self.cur_dist {
+                debug_assert!(
+                    board.dirs.is_set(start_row * dims.1) || start_row == board.r && 0 == board.c
+                );
                 for (i, &b) in array.iter().enumerate() {
                     if b && i != come_from {
                         let mut neighbor = board;
                         neighbor.make_move(MOVE_ARRAY[i], dims);
-                        let (neighbor_array, seen) = &map[&neighbor];
-                        let previously_seen = seen.replace(true);
-                        if !previously_seen {
+                        let (neighbor_array, ref mut seen) =
+                            map.get_mut(&neighbor).expect("Present");
+                        if !*seen {
                             let reverse_i = i ^ 1;
                             self.next_dist.push((neighbor, *neighbor_array, reverse_i));
                         }
+                        *seen = true;
                     }
                 }
             }
@@ -407,6 +409,16 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                     while !boards_set.is_empty() {
                         let board = *boards_set.iter().next().expect("Nonempty");
                         let map = component_searcher.component(&board, dims);
+                        map.retain(|&comp_board, _| {
+                            if comp_board.dirs.is_set(start_row * dims.1) {
+                                true
+                            } else {
+                                if comp_board.r == start_row && comp_board.c == 1 {
+                                    boards_set.remove(&comp_board);
+                                }
+                                comp_board.r == start_row && comp_board.c == 0
+                            }
+                        });
                         let (dist, farthest) = dijkstra_searcher.dijkstra(map, start_row, dims);
                         if dist > max_depth {
                             if incremental_printing {
@@ -426,14 +438,6 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                             }
                             max_depth = dist;
                             deepest = Some((start_row, farthest));
-                        }
-                        for comp_board in map.keys() {
-                            if comp_board.r == start_row
-                                && comp_board.c == 1
-                                && comp_board.dirs.is_unset(start_row * dims.1)
-                            {
-                                boards_set.remove(comp_board);
-                            }
                         }
                         comps_search += 1;
                         if incremental_printing && comps_search % frequency == 0 {
@@ -579,7 +583,7 @@ fn main() {
         0 => explore(),
         1 => search_one(),
         2 => {
-            for dims in [(4, 4), (4, 5), (5, 4)] {
+            for dims in [(4, 4), (4, 5), (5, 4), (4, 6)] {
                 search(dims, false);
             }
         }
