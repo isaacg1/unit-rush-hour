@@ -196,6 +196,8 @@ struct ComponentSearcher {
     seen: AHashMap<Board, ([bool; 4], bool)>,
     in_boards: Vec<(Board, usize)>,
     out_boards: Vec<(Board, usize)>,
+    out_remove: Vec<Board>,
+    out_initialize: Vec<(Board, [bool; 4], usize)>,
 }
 impl ComponentSearcher {
     fn new() -> Self {
@@ -203,6 +205,8 @@ impl ComponentSearcher {
             seen: AHashMap::new(),
             in_boards: vec![],
             out_boards: vec![],
+            out_remove: vec![],
+            out_initialize: vec![],
         }
     }
     // Returns reference to seen.
@@ -210,10 +214,16 @@ impl ComponentSearcher {
         &mut self,
         board: &Board,
         dims: Dimensions,
-    ) -> &mut AHashMap<Board, ([bool; 4], bool)> {
+    ) -> (
+        &mut AHashMap<Board, ([bool; 4], bool)>,
+        &mut Vec<Board>,
+        &mut Vec<(Board, [bool; 4], usize)>,
+    ) {
         self.seen.clear();
         self.in_boards.clear();
         self.out_boards.clear();
+        self.out_remove.clear();
+        self.out_initialize.clear();
         self.in_boards.push((*board, 2));
         self.seen.insert(*board, ([false; 4], false));
         assert!(board.c == 1);
@@ -231,6 +241,19 @@ impl ComponentSearcher {
                     let mut new_board = search_board;
                     let movable = new_board.make_move(movement, dims);
                     if movable {
+                        if new_board.dirs.is_unset(board.r * dims.1)
+                            && (new_board.r != board.r || new_board.c > 1)
+                        {
+                            continue;
+                        }
+                        if new_board.dirs.is_unset(board.r * dims.1)
+                            && new_board.r == board.r
+                            && new_board.c == 1
+                        {
+                            self.out_remove.push(new_board);
+                            continue;
+                        }
+
                         let reverse_i = i ^ 1;
                         let entry = self.seen.entry(new_board);
                         if let Entry::Vacant(_) = entry {
@@ -241,15 +264,26 @@ impl ComponentSearcher {
                         successes.push(i);
                     }
                 }
-                if !successes.is_empty() {
+                let initializer = search_board.r == board.r
+                    && search_board.c == 0
+                    && search_board.dirs.is_unset(board.r * dims.1 + 1);
+                if !successes.is_empty() || initializer {
                     let board_neighbors = &mut self.seen.get_mut(&search_board).expect("Present").0;
                     for i in successes {
                         board_neighbors[i as usize] = true;
                     }
+                    if initializer {
+                        self.out_initialize
+                            .push((search_board, *board_neighbors, 3));
+                    }
                 }
             }
             if self.out_boards.is_empty() {
-                return &mut self.seen;
+                return (
+                    &mut self.seen,
+                    &mut self.out_remove,
+                    &mut self.out_initialize,
+                );
             } else {
                 std::mem::swap(&mut self.in_boards, &mut self.out_boards);
             }
@@ -258,6 +292,7 @@ impl ComponentSearcher {
 }
 
 // Holds cur_dist, next_dist to avoid reallocation
+// Expects preinitialized cur_dist
 struct DijkstraSearcher {
     cur_dist: Vec<(Board, [bool; 4], usize)>,
     next_dist: Vec<(Board, [bool; 4], usize)>,
@@ -269,6 +304,9 @@ impl DijkstraSearcher {
             next_dist: vec![],
         }
     }
+    fn initialize(&mut self, initialize: &mut Vec<(Board, [bool; 4], usize)>) {
+        std::mem::swap(initialize, &mut self.cur_dist);
+    }
     fn dijkstra(
         &mut self,
         map: &mut AHashMap<Board, ([bool; 4], bool)>,
@@ -276,26 +314,7 @@ impl DijkstraSearcher {
         dims: Dimensions,
     ) -> (usize, Board) {
         debug_assert!(map.values().all(|(_, seen)| !seen));
-        //self.cur_dist.clear();
         self.next_dist.clear();
-        /*
-        self.cur_dist.extend(
-            map.iter()
-                .filter(|(board, _)| {
-                    start_row == board.r
-                        && 0 == board.c
-                        && board.dirs.is_unset(start_row * dims.1 + 1)
-                })
-                .map(|(board, (array, _))| (*board, *array, 3)),
-        );
-        */
-        /*
-        for (board, (array, _)) in &*map {
-            if start_row == board.r && 0 == board.c && board.dirs.is_unset(start_row * dims.1 + 1) {
-                self.cur_dist.push((*board, *array, 3));
-            }
-        }
-        */
         debug_assert!(!self.cur_dist.is_empty());
         let mut steps = 1;
         loop {
@@ -416,22 +435,13 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                     let mut boards_set: AHashSet<Board> = boards.into_iter().collect();
                     while !boards_set.is_empty() {
                         let board = *boards_set.iter().next().expect("Nonempty");
-                        let map = component_searcher.component(&board, dims);
-                        // Combine multiple passes of iterating over map into one
-                        dijkstra_searcher.cur_dist.clear();
-                        map.retain(|&comp_board, (array, _)| {
-                            let bit = comp_board.dirs.is_set(start_row * dims.1);
-                            if !bit && comp_board.r == start_row && comp_board.c == 1 {
-                                boards_set.remove(&comp_board);
-                            }
-                            let is_leftmost = comp_board.r == start_row && comp_board.c == 0;
-                            if is_leftmost && comp_board.dirs.is_unset(start_row * dims.1 + 1) {
-                                dijkstra_searcher.cur_dist.push((comp_board, *array, 3));
-                                false
-                            } else {
-                                bit || is_leftmost
-                            }
-                        });
+                        let (map, out_remove, out_initialize) =
+                            component_searcher.component(&board, dims);
+                        for to_remove in out_remove.drain(..) {
+                            boards_set.remove(&to_remove);
+                        }
+                        boards_set.remove(&board);
+                        dijkstra_searcher.initialize(out_initialize);
                         let (dist, farthest) = dijkstra_searcher.dijkstra(map, start_row, dims);
                         if dist > max_depth {
                             if incremental_printing {
@@ -505,7 +515,7 @@ fn search_one() {
         c: 1,
     };
     let mut component_searcher = ComponentSearcher::new();
-    let map = component_searcher.component(&board, dimensions);
+    let map = component_searcher.component(&board, dimensions).0;
     println!("Seen {}", map.len());
     let target_board = Board {
         dirs: Bits(0b0011101011011000),
