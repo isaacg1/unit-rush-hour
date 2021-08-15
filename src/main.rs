@@ -276,8 +276,9 @@ impl DijkstraSearcher {
         dims: Dimensions,
     ) -> (usize, Board) {
         debug_assert!(map.values().all(|(_, seen)| !seen));
-        self.cur_dist.clear();
+        //self.cur_dist.clear();
         self.next_dist.clear();
+        /*
         self.cur_dist.extend(
             map.iter()
                 .filter(|(board, _)| {
@@ -287,6 +288,14 @@ impl DijkstraSearcher {
                 })
                 .map(|(board, (array, _))| (*board, *array, 3)),
         );
+        */
+        /*
+        for (board, (array, _)) in &*map {
+            if start_row == board.r && 0 == board.c && board.dirs.is_unset(start_row * dims.1 + 1) {
+                self.cur_dist.push((*board, *array, 3));
+            }
+        }
+        */
         debug_assert!(!self.cur_dist.is_empty());
         let mut steps = 1;
         loop {
@@ -298,8 +307,7 @@ impl DijkstraSearcher {
                     if b && i != come_from {
                         let mut neighbor = board;
                         neighbor.make_move(MOVE_ARRAY[i], dims);
-                        let (neighbor_array, ref mut seen) =
-                            map.get_mut(&neighbor).expect("Present");
+                        let (neighbor_array, seen) = map.get_mut(&neighbor).expect("Present");
                         if !*seen {
                             let reverse_i = i ^ 1;
                             self.next_dist.push((neighbor, *neighbor_array, reverse_i));
@@ -409,14 +417,19 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                     while !boards_set.is_empty() {
                         let board = *boards_set.iter().next().expect("Nonempty");
                         let map = component_searcher.component(&board, dims);
-                        map.retain(|&comp_board, _| {
-                            if comp_board.dirs.is_set(start_row * dims.1) {
-                                true
+                        // Combine multiple passes of iterating over map into one
+                        dijkstra_searcher.cur_dist.clear();
+                        map.retain(|&comp_board, (array, _)| {
+                            let bit = comp_board.dirs.is_set(start_row * dims.1);
+                            if !bit && comp_board.r == start_row && comp_board.c == 1 {
+                                boards_set.remove(&comp_board);
+                            }
+                            let is_leftmost = comp_board.r == start_row && comp_board.c == 0;
+                            if is_leftmost && comp_board.dirs.is_unset(start_row * dims.1 + 1) {
+                                dijkstra_searcher.cur_dist.push((comp_board, *array, 3));
+                                false
                             } else {
-                                if comp_board.r == start_row && comp_board.c == 1 {
-                                    boards_set.remove(&comp_board);
-                                }
-                                comp_board.r == start_row && comp_board.c == 0
+                                bit || is_leftmost
                             }
                         });
                         let (dist, farthest) = dijkstra_searcher.dijkstra(map, start_row, dims);
