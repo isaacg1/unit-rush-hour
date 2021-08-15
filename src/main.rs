@@ -175,7 +175,7 @@ impl ComponentSearcher {
             for (search_board, came_from) in self.in_boards.drain(..) {
                 let mut success_array = [false; 4];
                 let mut any_success = false;
-                for (i, &movement) in MOVE_ARRAY.iter().enumerate() {
+                for movement in MOVE_ARRAY {
                     // Don't need to search back
                     if movement == came_from {
                         continue;
@@ -205,6 +205,7 @@ impl ComponentSearcher {
                             self.out_boards.push((new_board, movement.reverse()));
                         }
                         let entry = entry.or_insert(([false; 4], false));
+                        let i = movement as usize;
                         let reverse_i = i ^ 1;
                         entry.0[reverse_i as usize] = true;
                         success_array[i as usize] = true;
