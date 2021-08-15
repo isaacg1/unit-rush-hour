@@ -579,7 +579,7 @@ fn main() {
         0 => explore(),
         1 => search_one(),
         2 => {
-            for dims in [(4, 4), (4, 5), (5, 4)] {
+            for dims in [(4, 4), (4, 5), (5, 4), (4, 6)] {
                 search(dims, false);
             }
         }
