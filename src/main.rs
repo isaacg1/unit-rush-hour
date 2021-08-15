@@ -1,6 +1,5 @@
 use ahash::{AHashMap, AHashSet};
 
-use std::cell::Cell;
 use std::collections::hash_map::Entry;
 use std::time::SystemTime;
 
@@ -194,7 +193,7 @@ impl Board {
 
 // Holds seen, in_boards, out_boards to avoid reallocation
 struct ComponentSearcher {
-    seen: AHashMap<Board, ([bool; 4], Cell<bool>)>,
+    seen: AHashMap<Board, ([bool; 4], bool)>,
     in_boards: Vec<(Board, usize)>,
     out_boards: Vec<(Board, usize)>,
 }
@@ -211,12 +210,12 @@ impl ComponentSearcher {
         &mut self,
         board: &Board,
         dims: Dimensions,
-    ) -> &AHashMap<Board, ([bool; 4], Cell<bool>)> {
+    ) -> &mut AHashMap<Board, ([bool; 4], bool)> {
         self.seen.clear();
         self.in_boards.clear();
         self.out_boards.clear();
         self.in_boards.push((*board, 2));
-        self.seen.insert(*board, ([false; 4], Cell::new(false)));
+        self.seen.insert(*board, ([false; 4], false));
         assert!(board.c == 1);
         loop {
             for (search_board, came_from) in self.in_boards.drain(..) {
@@ -237,7 +236,7 @@ impl ComponentSearcher {
                         if let Entry::Vacant(_) = entry {
                             self.out_boards.push((new_board, reverse_i));
                         }
-                        let entry = entry.or_insert(([false; 4], Cell::new(false)));
+                        let entry = entry.or_insert(([false; 4], false));
                         entry.0[reverse_i as usize] = true;
                         successes.push(i);
                     }
@@ -250,7 +249,7 @@ impl ComponentSearcher {
                 }
             }
             if self.out_boards.is_empty() {
-                return &self.seen;
+                return &mut self.seen;
             } else {
                 std::mem::swap(&mut self.in_boards, &mut self.out_boards);
             }
@@ -272,11 +271,11 @@ impl DijkstraSearcher {
     }
     fn dijkstra(
         &mut self,
-        map: &AHashMap<Board, ([bool; 4], Cell<bool>)>,
+        map: &mut AHashMap<Board, ([bool; 4], bool)>,
         start_row: u8,
         dims: Dimensions,
     ) -> (usize, Board) {
-        debug_assert!(map.values().all(|(_, seen)| !seen.get()));
+        debug_assert!(map.values().all(|(_, seen)| !seen));
         self.cur_dist.clear();
         self.next_dist.clear();
         self.cur_dist.extend(
@@ -297,12 +296,13 @@ impl DijkstraSearcher {
                     if b && i != come_from {
                         let mut neighbor = board;
                         neighbor.make_move(MOVE_ARRAY[i], dims);
-                        let (neighbor_array, seen) = &map[&neighbor];
-                        let previously_seen = seen.replace(true);
-                        if !previously_seen {
+                        let (neighbor_array, ref mut seen) =
+                            map.get_mut(&neighbor).expect("Present");
+                        if !*seen {
                             let reverse_i = i ^ 1;
                             self.next_dist.push((neighbor, *neighbor_array, reverse_i));
                         }
+                        *seen = true;
                     }
                 }
             }
