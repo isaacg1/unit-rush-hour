@@ -288,18 +288,24 @@ impl DijkstraSearcher {
 }
 
 struct Generator {
-    working_instances: Vec<(Board, Vec<u8>, Vec<u8>, u8, u8)>
+    working_instances: Vec<(Board, Vec<u8>, Vec<u8>, u8, u8)>,
 }
 impl Generator {
     fn new() -> Self {
         Self {
             working_instances: vec![],
-            }
+        }
     }
-// All boards with this many verts in the rows and cols.
-// Cursor counts as vert for row and horiz for col, so we subtract 1 from row.
-// Must also be in starting position, c == 1.
-fn generate(&mut self, row_counts: &[u8], col_counts: &[u8], start_row: u8, dims: Dimensions) -> Vec<Board> {
+    // All boards with this many verts in the rows and cols.
+    // Cursor counts as vert for row and horiz for col, so we subtract 1 from row.
+    // Must also be in starting position, c == 1.
+    fn generate(
+        &mut self,
+        row_counts: &[u8],
+        col_counts: &[u8],
+        start_row: u8,
+        dims: Dimensions,
+    ) -> Vec<Board> {
         let debug = false;
         if debug {
             println!("{:?} {:?} {}", row_counts, col_counts, start_row);
@@ -334,72 +340,80 @@ fn generate(&mut self, row_counts: &[u8], col_counts: &[u8], start_row: u8, dims
             row_sum,
         ));
         self.main_generate(dims)
-}
-fn main_generate(&mut self, dims: Dimensions) -> Vec<Board> {
-    let mut out_boards = vec![];
-    while let Some(instance) = self.working_instances.pop() {
-        let (mut board, mut row_counts, mut col_counts, cur, total) = instance;
-        debug_assert_eq!(row_counts.iter().sum::<u8>(), col_counts.iter().sum::<u8>());
-        if total == 0 {
-            out_boards.push(board);
-            continue;
-        }
-        let cur_r = cur / dims.1;
-        let cur_c = cur % dims.1;
-        if cur_r >= dims.0 {
-            continue;
-        }
-        if dims.0 * dims.1 - cur < total {
-            continue;
-        }
-        if dims.0 * dims.1 - cur == total {
-            for index in cur..dims.0 * dims.1 {
-                board.dirs.set(index);
+    }
+    fn main_generate(&mut self, dims: Dimensions) -> Vec<Board> {
+        let mut out_boards = vec![];
+        while let Some(instance) = self.working_instances.pop() {
+            let (mut board, mut row_counts, mut col_counts, cur, total) = instance;
+            debug_assert_eq!(row_counts.iter().sum::<u8>(), col_counts.iter().sum::<u8>());
+            if total == 0 {
+                out_boards.push(board);
+                continue;
             }
-            out_boards.push(board);
-            continue;
-        }
-        // Blockage set in place. Note that we never have self.r == dims.0 - 1
-        if cur == (board.r + 1) * dims.1 + 1 && board.prefilter_out(dims) {
-            continue;
-        }
-        let should_decr = row_counts[cur_r as usize] > 0
+            let cur_r = cur / dims.1;
+            let cur_c = cur % dims.1;
+            if cur_r >= dims.0 {
+                continue;
+            }
+            if dims.0 * dims.1 - cur < total {
+                continue;
+            }
+            if dims.0 * dims.1 - cur == total {
+                for index in cur..dims.0 * dims.1 {
+                    board.dirs.set(index);
+                }
+                out_boards.push(board);
+                continue;
+            }
+            // Blockage set in place. Note that we never have self.r == dims.0 - 1
+            if cur == (board.r + 1) * dims.1 + 1 && board.prefilter_out(dims) {
+                continue;
+            }
+            let should_decr = row_counts[cur_r as usize] > 0
                 && col_counts[cur_c as usize] > 0
                 // cur_c must be greater than self.c, because both cursor and left are auto horiz
                 && (cur_r != board.r || cur_c > board.c);
-        let should_hold = row_counts[cur_r as usize] < dims.1 - cur_c
-            && col_counts[cur_c as usize] < dims.0 - cur_r;
-        match (should_decr, should_hold) {
-            (true, true) => {
-                let mut new_board = board;
-                new_board.dirs.set(cur);
-                let mut new_row_counts = row_counts.clone();
-                new_row_counts[cur_r as usize] -= 1;
-                let mut new_col_counts = col_counts.clone();
-                new_col_counts[cur_c as usize] -= 1;
-                self.working_instances.push((
-                    new_board,
-                    new_row_counts,
-                    new_col_counts,
-                    cur + 1,
-                    total - 1,
-                ));
-                self.working_instances.push((board, row_counts, col_counts, cur + 1, total))
+            let should_hold = row_counts[cur_r as usize] < dims.1 - cur_c
+                && col_counts[cur_c as usize] < dims.0 - cur_r;
+            match (should_decr, should_hold) {
+                (true, true) => {
+                    let mut new_board = board;
+                    new_board.dirs.set(cur);
+                    let mut new_row_counts = row_counts.clone();
+                    new_row_counts[cur_r as usize] -= 1;
+                    let mut new_col_counts = col_counts.clone();
+                    new_col_counts[cur_c as usize] -= 1;
+                    self.working_instances.push((
+                        new_board,
+                        new_row_counts,
+                        new_col_counts,
+                        cur + 1,
+                        total - 1,
+                    ));
+                    self.working_instances
+                        .push((board, row_counts, col_counts, cur + 1, total))
+                }
+                (true, false) => {
+                    board.dirs.set(cur);
+                    row_counts[cur_r as usize] -= 1;
+                    col_counts[cur_c as usize] -= 1;
+                    self.working_instances.push((
+                        board,
+                        row_counts,
+                        col_counts,
+                        cur + 1,
+                        total - 1,
+                    ));
+                }
+                (false, true) => {
+                    self.working_instances
+                        .push((board, row_counts, col_counts, cur + 1, total))
+                }
+                (false, false) => (),
             }
-            (true, false) => {
-                board.dirs.set(cur);
-                row_counts[cur_r as usize] -= 1;
-                col_counts[cur_c as usize] -= 1;
-                self.working_instances.push((board, row_counts, col_counts, cur + 1, total - 1));
-            }
-            (false, true) => {
-                self.working_instances.push((board, row_counts, col_counts, cur + 1, total))
-            }
-            (false, false) => (),
         }
+        out_boards
     }
-    out_boards
-}
 }
 
 fn product(bound: u8, reps: u8) -> Vec<Vec<u8>> {
@@ -466,6 +480,9 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                             boards_set.remove(&to_remove);
                         }
                         boards_set.remove(&board);
+                        if map.len() <= max_depth {
+                            continue;
+                        }
                         dijkstra_searcher.initialize(out_initialize);
                         let (dist, farthest) = dijkstra_searcher.dijkstra(map, start_row, dims);
                         if dist > max_depth {
@@ -473,6 +490,7 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                                 let time = start.elapsed().expect("Positive").as_secs();
                                 if time - last_cool_time > time_frequency / 10 {
                                     last_cool_time = time;
+                                    last_print_time = time;
                                     println!(
                                         "{} {} {:?} {:?} {} {} {} {}",
                                         dist,
