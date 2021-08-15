@@ -5,11 +5,12 @@ use std::time::SystemTime;
 
 type Dimensions = (u8, u8);
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
+#[repr(u8)]
 enum Move {
-    Up,
-    Down,
-    Left,
-    Right,
+    Up = 0,
+    Down = 1,
+    Left = 2,
+    Right = 3,
 }
 impl Move {
     fn vertical(&self) -> bool {
