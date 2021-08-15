@@ -224,19 +224,20 @@ impl ComponentSearcher {
         self.out_boards.clear();
         self.out_remove.clear();
         self.out_initialize.clear();
-        self.in_boards.push((*board, 2));
+        self.in_boards.push((*board, 0));
         self.seen.insert(*board, ([false; 4], false));
         assert!(board.c == 1);
         loop {
             for (search_board, came_from) in self.in_boards.drain(..) {
                 let mut successes = vec![];
                 for (i, &movement) in MOVE_ARRAY.iter().enumerate() {
+                    if i == came_from {
+                        continue;
+                    }
                     if &search_board == board {
                         if i != 2 {
                             continue;
                         }
-                    } else if i == came_from {
-                        continue;
                     }
                     let mut new_board = search_board;
                     let movable = new_board.make_move(movement, dims);
@@ -253,7 +254,6 @@ impl ComponentSearcher {
                             self.out_remove.push(new_board);
                             continue;
                         }
-
                         let reverse_i = i ^ 1;
                         let entry = self.seen.entry(new_board);
                         if let Entry::Vacant(_) = entry {
