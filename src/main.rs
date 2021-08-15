@@ -124,64 +124,6 @@ impl Board {
             false
         }
     }
-    // row and col counts are remaining verts in row and col.
-    // Sums must be equal.
-    // Can speed up by fast-filling cols
-    fn generate(
-        mut self,
-        row_counts: &[u8],
-        col_counts: &[u8],
-        cur: u8,
-        total: u8,
-        dims: Dimensions,
-    ) -> Vec<Board> {
-        debug_assert_eq!(row_counts.iter().sum::<u8>(), col_counts.iter().sum::<u8>());
-        if total == 0 {
-            return vec![self];
-        }
-        let cur_r = cur / dims.1;
-        let cur_c = cur % dims.1;
-        if cur_r >= dims.0 {
-            return vec![];
-        }
-        if dims.0 * dims.1 - cur < total {
-            return vec![];
-        }
-        if dims.0 * dims.1 - cur == total {
-            for index in cur..dims.0 * dims.1 {
-                self.dirs.set(index);
-            }
-            return vec![self];
-        }
-        // Blockage set in place. Note that we never have self.r == dims.0 - 1
-        if cur == (self.r + 1) * dims.1 + 1 && self.prefilter_out(dims) {
-            return vec![];
-        }
-        let set_true = if row_counts[cur_r as usize] > 0
-            && col_counts[cur_c as usize] > 0
-            // cur_c must be greater than self.c, because both cursor and left are auto horiz
-            && (cur_r != self.r || cur_c > self.c )
-        {
-            let mut new_board = self;
-            new_board.dirs.set(cur);
-            let mut new_row_counts = row_counts.to_owned();
-            new_row_counts[cur_r as usize] -= 1;
-            let mut new_col_counts = col_counts.to_owned();
-            new_col_counts[cur_c as usize] -= 1;
-            new_board.generate(&new_row_counts, &new_col_counts, cur + 1, total - 1, dims)
-        } else {
-            vec![]
-        };
-        let mut set_false = if row_counts[cur_r as usize] < dims.1 - cur_c
-            && col_counts[cur_c as usize] < dims.0 - cur_r
-        {
-            self.generate(row_counts, col_counts, cur + 1, total, dims)
-        } else {
-            vec![]
-        };
-        set_false.extend(set_true);
-        set_false
-    }
     // Can't possibly succeed.
     fn prefilter_out(&self, dims: Dimensions) -> bool {
         debug_assert!(self.c == 1);
@@ -345,38 +287,119 @@ impl DijkstraSearcher {
     }
 }
 
+struct Generator {
+    working_instances: Vec<(Board, Vec<u8>, Vec<u8>, u8, u8)>
+}
+impl Generator {
+    fn new() -> Self {
+        Self {
+            working_instances: vec![],
+            }
+    }
 // All boards with this many verts in the rows and cols.
 // Cursor counts as vert for row and horiz for col, so we subtract 1 from row.
 // Must also be in starting position, c == 1.
-fn generate(row_counts: &[u8], col_counts: &[u8], start_row: u8, dims: Dimensions) -> Vec<Board> {
-    let debug = false;
-    let mut all_outs = vec![];
-    if debug {
-        println!("{:?} {:?} {}", row_counts, col_counts, start_row);
-    }
-    if row_counts[start_row as usize] == 0 {
-        return vec![];
-    }
-    let mut fixed_row_counts = row_counts.to_owned();
-    fixed_row_counts[start_row as usize] -= 1;
-    let row_sum: u8 = fixed_row_counts.iter().sum();
-    let col_sum: u8 = col_counts.iter().sum();
-    assert_eq!(row_sum, col_sum);
-    if start_row * 2 + 1 == dims.0 {
-        let rev_rows: Vec<u8> = row_counts.iter().cloned().rev().collect();
-        if row_counts < &rev_rows {
+fn generate(&mut self, row_counts: &[u8], col_counts: &[u8], start_row: u8, dims: Dimensions) -> Vec<Board> {
+        let debug = false;
+        if debug {
+            println!("{:?} {:?} {}", row_counts, col_counts, start_row);
+        }
+        if row_counts[start_row as usize] == 0 {
             return vec![];
         }
-    }
+        let mut fixed_row_counts = row_counts.to_owned();
+        fixed_row_counts[start_row as usize] -= 1;
+        let row_sum: u8 = fixed_row_counts.iter().sum();
+        let col_sum: u8 = col_counts.iter().sum();
+        assert_eq!(row_sum, col_sum);
+        if start_row * 2 + 1 == dims.0 {
+            let rev_rows: Vec<u8> = row_counts.iter().cloned().rev().collect();
+            if row_counts < &rev_rows {
+                return vec![];
+            }
+        }
 
-    let board = Board {
-        dirs: Bits(0),
-        r: start_row,
-        c: 1,
-    };
-    let results = board.generate(&fixed_row_counts, col_counts, 0, row_sum, dims);
-    all_outs.extend(results);
-    all_outs
+        let not_board = Board {
+            dirs: Bits(0),
+            r: start_row,
+            c: 1,
+        };
+        debug_assert_eq!(row_counts.iter().sum::<u8>(), col_counts.iter().sum::<u8>());
+        self.working_instances.clear();
+        self.working_instances.push((
+            not_board,
+            fixed_row_counts,
+            col_counts.to_owned(),
+            0,
+            row_sum,
+        ));
+        self.main_generate(dims)
+}
+fn main_generate(&mut self, dims: Dimensions) -> Vec<Board> {
+    let mut out_boards = vec![];
+    while let Some(instance) = self.working_instances.pop() {
+        let (mut board, mut row_counts, mut col_counts, cur, total) = instance;
+        debug_assert_eq!(row_counts.iter().sum::<u8>(), col_counts.iter().sum::<u8>());
+        if total == 0 {
+            out_boards.push(board);
+            continue;
+        }
+        let cur_r = cur / dims.1;
+        let cur_c = cur % dims.1;
+        if cur_r >= dims.0 {
+            continue;
+        }
+        if dims.0 * dims.1 - cur < total {
+            continue;
+        }
+        if dims.0 * dims.1 - cur == total {
+            for index in cur..dims.0 * dims.1 {
+                board.dirs.set(index);
+            }
+            out_boards.push(board);
+            continue;
+        }
+        // Blockage set in place. Note that we never have self.r == dims.0 - 1
+        if cur == (board.r + 1) * dims.1 + 1 && board.prefilter_out(dims) {
+            continue;
+        }
+        let should_decr = row_counts[cur_r as usize] > 0
+                && col_counts[cur_c as usize] > 0
+                // cur_c must be greater than self.c, because both cursor and left are auto horiz
+                && (cur_r != board.r || cur_c > board.c);
+        let should_hold = row_counts[cur_r as usize] < dims.1 - cur_c
+            && col_counts[cur_c as usize] < dims.0 - cur_r;
+        match (should_decr, should_hold) {
+            (true, true) => {
+                let mut new_board = board;
+                new_board.dirs.set(cur);
+                let mut new_row_counts = row_counts.clone();
+                new_row_counts[cur_r as usize] -= 1;
+                let mut new_col_counts = col_counts.clone();
+                new_col_counts[cur_c as usize] -= 1;
+                self.working_instances.push((
+                    new_board,
+                    new_row_counts,
+                    new_col_counts,
+                    cur + 1,
+                    total - 1,
+                ));
+                self.working_instances.push((board, row_counts, col_counts, cur + 1, total))
+            }
+            (true, false) => {
+                board.dirs.set(cur);
+                row_counts[cur_r as usize] -= 1;
+                col_counts[cur_c as usize] -= 1;
+                self.working_instances.push((board, row_counts, col_counts, cur + 1, total - 1));
+            }
+            (false, true) => {
+                self.working_instances.push((board, row_counts, col_counts, cur + 1, total))
+            }
+            (false, false) => (),
+        }
+    }
+    out_boards
+}
 }
 
 fn product(bound: u8, reps: u8) -> Vec<Vec<u8>> {
@@ -411,10 +434,12 @@ fn search(dims: Dimensions, incremental_printing: bool) {
     let frequency = 1_000_000;
     let mut comps_search = 0;
     let mut last_print_time = 0;
+    let mut last_cool_time = 0;
     let time_frequency = 60;
     let start = SystemTime::now();
     let mut component_searcher = ComponentSearcher::new();
     let mut dijkstra_searcher = DijkstraSearcher::new();
+    let mut generator = Generator::new();
     for sum in 0..dims.0 * dims.1 {
         for row_counts in &row_counts_lists[sum as usize + 1] {
             // 0: inaccessible, Max: decisionless
@@ -431,7 +456,7 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                     continue;
                 }
                 for start_row in 0..(dims.0 + 1) / 2 {
-                    let boards = generate(row_counts, col_counts, start_row, dims);
+                    let boards = generator.generate(row_counts, col_counts, start_row, dims);
                     let mut boards_set: AHashSet<Board> = boards.into_iter().collect();
                     while !boards_set.is_empty() {
                         let board = *boards_set.iter().next().expect("Nonempty");
@@ -445,19 +470,23 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                         let (dist, farthest) = dijkstra_searcher.dijkstra(map, start_row, dims);
                         if dist > max_depth {
                             if incremental_printing {
-                                println!(
-                                    "{} {} {:?} {:?} {} {} {} {}",
-                                    dist,
-                                    sum,
-                                    row_counts,
-                                    col_counts,
-                                    start_row,
-                                    map.len(),
-                                    comps_search,
-                                    start.elapsed().expect("Positive").as_secs()
-                                );
-                                farthest.print(dims);
-                                println!();
+                                let time = start.elapsed().expect("Positive").as_secs();
+                                if time - last_cool_time > time_frequency / 10 {
+                                    last_cool_time = time;
+                                    println!(
+                                        "{} {} {:?} {:?} {} {} {} {}",
+                                        dist,
+                                        sum,
+                                        row_counts,
+                                        col_counts,
+                                        start_row,
+                                        map.len(),
+                                        comps_search,
+                                        start.elapsed().expect("Positive").as_secs()
+                                    );
+                                    farthest.print(dims);
+                                    println!();
+                                }
                             }
                             max_depth = dist;
                             deepest = Some((start_row, farthest));
