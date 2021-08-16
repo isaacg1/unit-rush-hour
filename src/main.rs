@@ -559,7 +559,7 @@ fn search(dims: Dimensions, incremental_printing: bool) {
 }
 
 fn search_all() {
-    for sum in 8..=12 {
+    for sum in 8.. {
         let dim_pairs = if sum % 2 == 0 {
             vec![(sum / 2, sum / 2)]
         } else {
