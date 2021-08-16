@@ -136,10 +136,16 @@ impl Board {
     }
     // Can't possibly succeed.
     fn prefilter_out(&self, dims: Dimensions) -> bool {
-        debug_assert!(self.c == 1);
+        debug_assert!(self.c == 1 && self.dirs.is_unset(self.r * dims.1));
         let up_blocked = self.r == 0 || self.dirs.is_unset((self.r - 1) * dims.1);
         let down_blocked = self.r == dims.0 - 1 || self.dirs.is_unset((self.r + 1) * dims.1);
         up_blocked && down_blocked
+    }
+    fn is_initializer(&self, start_row: u8, dims: Dimensions) -> bool {
+        self.r == start_row && self.c == 0 && self.dirs.is_unset(start_row * dims.1 + 1)
+    }
+    fn is_starter(&self, start_row: u8, dims: Dimensions) -> bool {
+        self.r == start_row && self.c == 1 && self.dirs.is_unset(start_row * dims.1)
     }
 }
 
@@ -168,36 +174,25 @@ impl ComponentSearcher {
         self.out_boards.clear();
         self.out_remove.clear();
         self.out_initialize.clear();
-        // Up is a lie, doesn't matter
-        self.in_boards.push((*board, Move::Up));
-        self.seen.insert(*board, ([false; 4], false));
-        assert!(board.c == 1);
+        let start_row = board.r;
+        // Let's advance by one.
+        let mut left_board = *board;
+        left_board.make_move(Move::Left, dims);
+        self.seen.insert(left_board, ([false; 4], false));
+        self.in_boards.push((left_board, Move::Right));
         loop {
             for (search_board, came_from) in self.in_boards.drain(..) {
                 let mut success_array = [false; 4];
-                let mut any_success = false;
+                let mut any_success = search_board.is_initializer(start_row, dims);
                 for movement in MOVE_ARRAY {
                     // Don't need to search back
                     if movement == came_from {
                         continue;
                     }
-                    // From start, only go left
-
-                    if &search_board == board && movement != Move::Left {
-                        continue;
-                    }
                     let mut new_board = search_board;
                     let movable = new_board.make_move(movement, dims);
                     if movable {
-                        if new_board.dirs.is_unset(board.r * dims.1)
-                            && (new_board.r != board.r || new_board.c > 1)
-                        {
-                            continue;
-                        }
-                        if new_board.dirs.is_unset(board.r * dims.1)
-                            && new_board.r == board.r
-                            && new_board.c == 1
-                        {
+                        if new_board.is_starter(start_row, dims) {
                             self.out_remove.push(new_board);
                             continue;
                         }
@@ -205,7 +200,7 @@ impl ComponentSearcher {
                         if let Entry::Vacant(_) = entry {
                             self.out_boards.push((new_board, movement.reverse()));
                         }
-                        let entry = entry.or_insert(([false; 4], false));
+                        let entry = entry.or_default();
                         let i = movement as usize;
                         let reverse_i = i ^ 1;
                         entry.0[reverse_i as usize] = true;
@@ -213,15 +208,12 @@ impl ComponentSearcher {
                         any_success = true;
                     }
                 }
-                let initializer = search_board.r == board.r
-                    && search_board.c == 0
-                    && search_board.dirs.is_unset(board.r * dims.1 + 1);
-                if any_success || initializer {
+                if any_success {
                     let board_neighbors = &mut self.seen.get_mut(&search_board).expect("Present").0;
                     for (neighbor, success) in board_neighbors.iter_mut().zip(success_array) {
                         *neighbor |= success;
                     }
-                    if initializer {
+                    if search_board.is_initializer(start_row, dims) {
                         self.out_initialize
                             .push((search_board, *board_neighbors, 3));
                     }
@@ -343,7 +335,10 @@ impl Generator {
             r: start_row,
             c: 1,
         };
-        debug_assert_eq!(row_counts.iter().sum::<u8>(), col_counts.iter().sum::<u8>());
+        debug_assert_eq!(
+            fixed_row_counts.iter().sum::<u8>(),
+            col_counts.iter().sum::<u8>()
+        );
         self.working_instances.clear();
         let starter_instance = GenerateInstance {
             board,
