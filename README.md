@@ -35,7 +35,8 @@ Options:
     cargo run --release 1: Discovering the hardest board that ends at a specific board
     cargo run --release 2: Discovering the hardest board for a bunch of small board sizes.
         Benchmark. About 5s on my laptop if nothing else is running.
-    cargo run --release 3: Discover the hardest board for all sizes. Prints out a bunch of progress info.
+    cargo run --release 3: Discover the hardest board for all sizes. 
+        Prints out a bunch of progress info.
     cargo run --release 4: Play the game.
 
 I'm on an ongoing project to optimize the performance as much as I can,
