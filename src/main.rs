@@ -45,8 +45,27 @@ impl Bits {
     fn set(&mut self, index: u8) {
         self.0 |= 1 << index;
     }
-    fn unset(&mut self, index: u8) {
+    // unset, and return whether it was set
+    fn remove(&mut self, index: u8) -> bool {
+        let old = self.0;
         self.0 &= !(1 << index);
+        old != self.0
+    }
+    fn get_row_sum(&self, row_mask: u64, row: u8, dims: Dimensions) -> u32 {
+        let shifted_row_mask = row_mask << row * dims.1;
+        let just_row = self.0 & shifted_row_mask;
+        just_row.count_ones()
+    }
+    fn get_col_sum(&self, col_mask: u64, col: u8) -> u32 {
+        let shifted_col_mask = col_mask << col;
+        let just_col = self.0 & shifted_col_mask;
+        just_col.count_ones()
+    }
+    fn row_mask(dims: Dimensions) -> u64 {
+        (0..dims.1).map(|i| 1 << i).sum()
+    }
+    fn col_mask(dims: Dimensions) -> u64 {
+        (0..dims.0).map(|i| 1 << (i * dims.1)).sum()
     }
 }
 
@@ -81,44 +100,28 @@ impl Board {
         }
     }
     // Returns whether move was successful
+    // Destroys if not
     fn make_move(&mut self, movement: Move, dims: Dimensions) -> bool {
         debug_assert!(self.r < dims.0);
         debug_assert!(self.c < dims.1);
         debug_assert!(64 >= dims.0 * dims.1);
-        let (new_r, new_c) = match movement {
-            Move::Up => {
-                if self.r == 0 {
-                    return false;
-                }
-                (self.r - 1, self.c)
-            }
-            Move::Down => {
-                if self.r == dims.0 - 1 {
-                    return false;
-                }
-                (self.r + 1, self.c)
-            }
-            Move::Left => {
-                if self.c == 0 {
-                    return false;
-                }
-                (self.r, self.c - 1)
-            }
-            Move::Right => {
-                if self.c == dims.1 - 1 {
-                    return false;
-                }
-                (self.r, self.c + 1)
-            }
+        let (new_r, new_c) = match (movement, self.r, self.c) {
+            (Move::Up, 0, _) => return false,
+            (Move::Up, r, c) => (r - 1, c),
+            (Move::Down, r, _) if r == dims.0 - 1 => return false,
+            (Move::Down, r, c) => (r + 1, c),
+            (Move::Left, _, 0) => return false,
+            (Move::Left, r, c) => (r, c - 1),
+            (Move::Right, _, c) if c == dims.1 - 1 => return false,
+            (Move::Right, r, c) => (r, c + 1),
         };
         let new_index = new_r * dims.1 + new_c;
-        let new_bit = self.dirs.is_set(new_index);
+        let new_bit = self.dirs.remove(new_index);
         if new_bit == movement.vertical() {
             let old_index = self.r * dims.1 + self.c;
             if new_bit {
                 self.dirs.set(old_index)
             }
-            self.dirs.unset(new_index);
             self.r = new_r;
             self.c = new_c;
             true
@@ -146,7 +149,6 @@ struct ComponentSearcher {
     seen: AHashSet<Board>,
     in_boards: Vec<(Board, Move)>,
     out_boards: Vec<(Board, Move)>,
-    out_remove: Vec<Board>,
     out_initialize: Vec<(Board, Move)>,
 }
 impl ComponentSearcher {
@@ -155,16 +157,14 @@ impl ComponentSearcher {
             seen: AHashSet::new(),
             in_boards: vec![],
             out_boards: vec![],
-            out_remove: vec![],
             out_initialize: vec![],
         }
     }
     // Just access elements directly
-    fn component(&mut self, board: &Board, dims: Dimensions) {
+    fn component(&mut self, board: &Board, to_remove_from: &mut AHashSet<Board>, dims: Dimensions) {
         self.seen.clear();
         self.in_boards.clear();
         self.out_boards.clear();
-        self.out_remove.clear();
         self.out_initialize.clear();
         let start_row = board.r;
         // Let's advance by one.
@@ -183,7 +183,7 @@ impl ComponentSearcher {
                     let movable = new_board.make_move(movement, dims);
                     if movable {
                         if new_board.is_starter(start_row, dims) {
-                            self.out_remove.push(new_board);
+                            to_remove_from.remove(&new_board);
                             continue;
                         }
                         let was_vacant = self.seen.insert(new_board);
@@ -259,8 +259,6 @@ impl DijkstraSearcher {
 
 struct GenerateInstance {
     board: Board,
-    row_counts: Vec<u8>,
-    col_counts: Vec<u8>,
     cur: u8,
     total: u8,
 }
@@ -317,26 +315,37 @@ impl Generator {
         self.working_instances.clear();
         let starter_instance = GenerateInstance {
             board,
-            row_counts: fixed_row_counts,
-            col_counts: col_counts.to_owned(),
             cur: 0,
             total: row_sum,
         };
         self.working_instances.push(starter_instance);
-        self.main_generate(dims)
+        self.main_generate(
+            &fixed_row_counts,
+            col_counts,
+            Bits::row_mask(dims),
+            Bits::col_mask(dims),
+            dims,
+        )
     }
-    fn main_generate(&mut self, dims: Dimensions) -> &mut AHashSet<Board> {
+    fn main_generate(
+        &mut self,
+        row_counts: &[u8],
+        col_counts: &[u8],
+        row_mask: u64,
+        col_mask: u64,
+        dims: Dimensions,
+    ) -> &mut AHashSet<Board> {
         while let Some(mut instance) = self.working_instances.pop() {
-            debug_assert_eq!(
-                instance.row_counts.iter().sum::<u8>(),
-                instance.col_counts.iter().sum::<u8>()
-            );
             if instance.total == 0 {
                 self.boards_set.insert(instance.board);
                 continue;
             }
             let cur_r = instance.cur / dims.1;
             let cur_c = instance.cur % dims.1;
+            let row_sum = instance.board.dirs.get_row_sum(row_mask, cur_r, dims) as u8;
+            let col_sum = instance.board.dirs.get_col_sum(col_mask, cur_c) as u8;
+            let remaining_row = row_counts[cur_r as usize] - row_sum;
+            let remaining_col = col_counts[cur_c as usize] - col_sum;
             if cur_r >= dims.0 {
                 continue;
             }
@@ -356,24 +365,17 @@ impl Generator {
             {
                 continue;
             }
-            let should_decr = instance.row_counts[cur_r as usize] > 0
-                && instance.col_counts[cur_c as usize] > 0
+            let should_decr = remaining_row > 0
+                && remaining_col > 0
                 // cur_c must be greater than self.c, because both cursor and left are auto horiz
                 && (cur_r != instance.board.r || cur_c > instance.board.c);
-            let should_hold = instance.row_counts[cur_r as usize] < dims.1 - cur_c
-                && instance.col_counts[cur_c as usize] < dims.0 - cur_r;
+            let should_hold = remaining_row < dims.1 - cur_c && remaining_col < dims.0 - cur_r;
             match (should_decr, should_hold) {
                 (true, true) => {
                     let mut new_board = instance.board;
                     new_board.dirs.set(instance.cur);
-                    let mut new_row_counts = instance.row_counts.clone();
-                    new_row_counts[cur_r as usize] -= 1;
-                    let mut new_col_counts = instance.col_counts.clone();
-                    new_col_counts[cur_c as usize] -= 1;
                     let new_decr_instance = GenerateInstance {
                         board: new_board,
-                        row_counts: new_row_counts,
-                        col_counts: new_col_counts,
                         cur: instance.cur + 1,
                         total: instance.total - 1,
                     };
@@ -383,8 +385,6 @@ impl Generator {
                 }
                 (true, false) => {
                     instance.board.dirs.set(instance.cur);
-                    instance.row_counts[cur_r as usize] -= 1;
-                    instance.col_counts[cur_c as usize] -= 1;
                     instance.cur += 1;
                     instance.total -= 1;
                     self.working_instances.push(instance);
@@ -458,11 +458,8 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                     //let mut boards_set: AHashSet<Board> = boards.into_iter().collect();
                     while !boards_set.is_empty() {
                         let board = *boards_set.iter().next().expect("Nonempty");
-                        component_searcher.component(&board, dims);
-                        for to_remove in component_searcher.out_remove.drain(..) {
-                            boards_set.remove(&to_remove);
-                        }
                         boards_set.remove(&board);
+                        component_searcher.component(&board, boards_set, dims);
                         if component_searcher.seen.len() <= max_depth {
                             continue;
                         }
@@ -545,7 +542,7 @@ fn search_one() {
         c: 1,
     };
     let mut component_searcher = ComponentSearcher::new();
-    component_searcher.component(&board, dimensions);
+    component_searcher.component(&board, &mut AHashSet::new(), dimensions);
     let seen = &mut component_searcher.seen;
     println!("Seen {}", seen.len());
     let target_board = Board {
