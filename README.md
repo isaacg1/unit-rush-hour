@@ -10,9 +10,9 @@ Empirically, this can be pretty hard - games can take a long time to complete.
 The game that takes the longest on boards of size 1x1, 2x2, 3x3, ...
 takes the following number of steps to win:
 
-     2x2 | 3x3 | 4x4 | 5x5 | 6x6
-    -----|-----|-----|-----|-----
-      3  | 12  | 40  | 199 | 732
+2x2 | 3x3 | 4x4 | 5x5 | 6x6
+----|-----|-----|-----|-----
+3   | 12  | 40  | 199 | 732
  
 This data is from 2004, in the following paper: [Limits of Rush Hour Logic Complexity](http://tromp.github.io/rh.ps).
 The goal of this program is to find the hardest 7x7 board, by brute-forcing farther.
@@ -24,7 +24,7 @@ Best fit for the data so far is:
 
 which gives the following fit and predictions:
 
-           | 2x2 | 3x3 | 4x4 | 5x5 | 6x6 | 7x7  |  8x8
+Kind       | 2x2 | 3x3 | 4x4 | 5x5 | 6x6 | 7x7  |  8x8
 -----------|-----|-----|-----|-----|-----|------|------
 Reality    |  3  | 12  | 40  | 199 | 732 |      |
 Prediction |  3  | 12  | 48  | 191 | 757 | 3010 | 11965
