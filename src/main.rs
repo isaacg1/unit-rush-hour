@@ -193,8 +193,7 @@ impl ComponentSearcher {
                     }
                 }
                 if search_board.is_initializer(start_row, dims) {
-                    self.out_initialize
-                        .push((search_board, Move::Right));
+                    self.out_initialize.push((search_board, Move::Right));
                 }
             }
             if self.out_boards.is_empty() {
@@ -211,7 +210,7 @@ impl ComponentSearcher {
 struct DijkstraSearcher {
     cur_dist: Vec<(Board, Move)>,
     next_dist: Vec<(Board, Move)>,
-    seen: AHashSet<Board>
+    seen: AHashSet<Board>,
 }
 impl DijkstraSearcher {
     fn new() -> Self {
@@ -224,11 +223,7 @@ impl DijkstraSearcher {
     fn initialize(&mut self, initialize: &mut Vec<(Board, Move)>) {
         std::mem::swap(initialize, &mut self.cur_dist);
     }
-    fn dijkstra(
-        &mut self,
-        start_row: u8,
-        dims: Dimensions,
-    ) -> (usize, Board) {
+    fn dijkstra(&mut self, start_row: u8, dims: Dimensions) -> (usize, Board) {
         self.next_dist.clear();
         self.seen.clear();
         debug_assert!(!self.cur_dist.is_empty());
@@ -243,7 +238,7 @@ impl DijkstraSearcher {
                         let mut neighbor = board;
                         let moved = neighbor.make_move(movement, dims);
                         if !moved {
-                            continue
+                            continue;
                         }
                         let was_vacant = self.seen.insert(neighbor);
                         if was_vacant {
@@ -472,10 +467,7 @@ fn search(dims: Dimensions, incremental_printing: bool) {
                             continue;
                         }
                         dijkstra_searcher.initialize(&mut component_searcher.out_initialize);
-                        let (dist, farthest) = dijkstra_searcher.dijkstra(
-                            start_row,
-                            dims,
-                        );
+                        let (dist, farthest) = dijkstra_searcher.dijkstra(start_row, dims);
                         if dist > max_depth {
                             if incremental_printing {
                                 let time = start.elapsed().expect("Positive").as_secs();
