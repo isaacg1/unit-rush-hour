@@ -20,14 +20,14 @@ The goal of this program is to find the hardest 7x7 board, by brute-forcing fart
 The complexity of this problem is very much open. NL? PSPACE-complete? I have no idea, though I'd lean toward PSPACE-complete.
 Best fit for the data so far is:
 
-    0.192 * e^(1.38x)
+    0.185 * e^(1.38x)
 
 which gives the following fit and predictions:
 
 Kind       | 2x2 | 3x3 | 4x4 | 5x5 | 6x6 | 7x7  |  8x8
 -----------|-----|-----|-----|-----|-----|------|------
 Reality    |  3  | 12  | 40  | 199 | 732 |      |
-Prediction |  3  | 12  | 48  | 191 | 757 | 3010 | 11965
+Prediction |  3  | 12  | 46  | 184 | 729 | 2900 | 11529
 
 Options:
 
